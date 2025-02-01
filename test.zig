@@ -13,7 +13,7 @@ pub fn main() !void {
 
     const tlist = scan(lambdaexp);
     for (tlist) |value| {
-        try stdout.print("{any}\n", .{value});
+        try stdout.print("{s} ", .{print_token(value)});
     }
 }
 
@@ -41,53 +41,76 @@ pub fn is_next(str: []const u8, c: u8) bool {
     }
 }
 
-pub fn scanName(str: []u8) struct { x: []const u8, y: []const u8 } {
-    var newstr: []u8 = "";
+pub fn scanName(str: []const u8) []const u8 {
+    var newstr: [10]u8 = undefined;
     var i: usize = 0;
-    while (str.len > 0) {
-        const c = str[0];
-        var str1 = str[1..];
+    for (str) |c| {
         if (is_letter(c)) {
             newstr[i] = c;
             i += 1;
-            str = str1;
         } else {
-            return .{ newstr, str1 };
+            return &newstr;
         }
     }
+    return &newstr;
 }
 
 pub fn scan(str: []u8) []const tokenT {
-    var tokenList = [_]tokenT{};
+    var tokenList: [25]tokenT = undefined;
     var i: usize = 0;
+    var tokeni: usize = 0;
+    var whilestr = str;
 
-    while (str.len > 0) {
-        const c = str[0];
-        if (str.len == 0) {
-            return &tokenList;
-        } else {
-            if (is_letter(c)) {
-                const strings = scanName(str);
-                if (std.mem.eql(u8, strings.x, "lam")) {
-                    tokenList[i] = tokenT.LamT;
-                } else {
-                    tokenList[i] = tokenT.ArgT;
-                }
-                str = strings.y;
+    while (whilestr.len > 0) {
+        const c = whilestr[0];
+        if (is_letter(c)) {
+            const scannedstr = scanName(whilestr);
+            if (std.mem.eql(u8, scannedstr, "lam")) {
+                tokenList[tokeni] = tokenT.LamT;
             } else {
-                if (c == '(') {
-                    tokenList[i] = tokenT.LParenT;
-                }
-                if (c == ')') {
-                    tokenList[i] = tokenT.RparenT;
-                }
-                if (c == '.') {
-                    tokenList[i] = tokenT.PeriodT;
-                }
+                tokenList[tokeni] = tokenT.ArgT;
             }
-            i += 1;
+            i = scannedstr.len;
+        } else {
+            tokenList[tokeni] = switch (c) {
+                '(' => tokenT.LParenT,
+                ')' => tokenT.RparenT,
+                '.' => tokenT.PeriodT,
+                else => continue,
+            };
+
+            // if (c == ) {
+            //     tokenList[tokeni] = tokenT.LParenT;
+            //     i = 1;
+            // }
+            // if (c == ')') {
+            //     tokenList[tokeni] = tokenT.RparenT;
+            //     i = 1;
+            // }
+            // if (c == '.') {
+            //     tokenList[tokeni] = tokenT.PeriodT;
+            //     i = 1;
+            // }
+            // if (c == ' ') {
+            //     whilestr = whilestr[1..];
+            //     continue;
+            // }
         }
+        tokeni += 1;
+        if (whilestr.len == 1)
+            break;
+        whilestr = whilestr[i..];
     }
 
-    return tokenList;
+    return &tokenList;
+}
+
+pub fn print_token(token: tokenT) []const u8 {
+    switch (token) {
+        tokenT.LamT => return "lam",
+        tokenT.ArgT => return "argT",
+        tokenT.LParenT => return "(",
+        tokenT.PeriodT => return ".",
+        tokenT.RparenT => return ")",
+    }
 }
