@@ -26,13 +26,21 @@ const Token = struct {
     value: []const u8,
 };
 
+const expE = union(enum) {
+    VarE: []const u8,
+    LambdaE: struct { arg: []const u8, body: *expE },
+    ApplyE: struct { func: *expE, arg: *expE },
+};
+
 const tokenT = enum {
     LamT,
     LParenT,
     RparenT,
     PeriodT,
-    ArgT,
+    IdT,
 };
+
+const errors = error{ InputEndsButExpectedAnExpression, InputEndsButExpectedToken, TokenSeenButExpected };
 
 pub fn is_letter(c: u8) bool {
     return c >= 'a' and c <= 'z';
@@ -60,7 +68,7 @@ pub fn scan(str: []u8, allocator: std.mem.Allocator) ![]Token {
             if (std.mem.eql(u8, scannedstr, "lam")) {
                 try tokenList.append(Token{ .kind = tokenT.LamT, .value = "lam" });
             } else {
-                try tokenList.append(Token{ .kind = tokenT.ArgT, .value = scannedstr });
+                try tokenList.append(Token{ .kind = tokenT.IdT, .value = scannedstr });
             }
             whilestr = whilestr[scannedstr.len..];
 
@@ -86,4 +94,22 @@ pub fn scan(str: []u8, allocator: std.mem.Allocator) ![]Token {
 
 pub fn print_token(token: Token) []const u8 {
     return token.value;
+}
+
+pub fn expect_token(expectedT: tokenT, tokens: []const Token) ![]const Token {
+    if (tokens.len == 0) {
+        return errors.InputEndsButExpectedToken;
+    }
+
+    const tok1 = tokens[0];
+    if (tok1.kind == expectedT) {
+        return tokens[1..];
+    } else {
+        return errors.TokenSeenButExpected;
+    }
+}
+
+// Parser
+pub fn parse_exp(: []Token) !std.meta.Tuple(&.{ expE, []Token }) {
+    
 }
