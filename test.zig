@@ -110,6 +110,52 @@ pub fn expect_token(expectedT: tokenT, tokens: []const Token) ![]const Token {
 }
 
 // Parser
-pub fn parse_exp(: []Token) !std.meta.Tuple(&.{ expE, []Token }) {
-    
+pub fn parse_exp(allocator: std.mem.Allocator, tokens: []const Token) !struct { *expE, []const Token } {
+    if (tokens.len == 0) {
+        return errors.InputEndsButExpectedAnExpression;
+    }
+
+    const token = tokens[0];
+
+    switch (token.kind) {
+        .IdT => {
+            const exp1 = try allocator.create(expE);
+            exp1.* = expE{ .VarE = token.value };
+            return .{ exp1, tokens[1..] };
+        },
+        .LParenT => {
+            var tail = tokens[1..];
+
+            if (tail.len > 0 and tail[0].kind == .LamT) {
+                tail = tail[1..];
+                if (tail.len == 0 or tail[0].kind != .IdT) {
+                    return errors.TokenSeenButExpected;
+                }
+
+                const arg = tail[0].value;
+                tail = tail[1..];
+
+                tail = try expect_token(.PeriodT, tail);
+                const result = try parse_exp(allocator, tail);
+                const body = result[0];
+                tail = result[1];
+
+                const exp1 = try allocator.create(expE);
+                exp1.* = expE{ .LambdaE = .{ .arg = arg, .body = body } };
+                tail = try expect_token(.RparenT, tail);
+                return .{ exp1, tail };
+            } else {
+                const left = try parse_exp(allocator, tail);
+                tail = left[1];
+                const right = try parse_exp(allocator, tail);
+                tail = right[1];
+                const exp1 = try allocator.create(expE);
+
+                exp1.* = expE{ .ApplyE = .{ .func = left[0], .arg = right[0] } };
+                left = try expect_token(.RparenT, tail);
+                return .{ exp1, tail };
+            }
+        },
+        else => return errors.TokenSeenButExpected,
+    }
 }
