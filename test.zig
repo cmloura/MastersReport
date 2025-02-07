@@ -14,9 +14,30 @@ pub fn main() !void {
 
     const tlist = try scan(lambdaexp, allocator);
     defer allocator.free(tlist);
+    errdefer allocator.free(tlist);
 
     for (tlist) |token| {
         try stdout.print("{s} ", .{print_token(token)});
+    }
+
+    const expstruct = parse_exp(allocator, tlist);
+    try print_exp(expstruct.resexp);
+}
+
+pub fn print_exp(headexp: *expE) !void {
+    const printer = std.io.getStdOut().writer();
+    switch (headexp.*) {
+        .VarE => |vare| {
+            printer.print(vare);
+        },
+        .LambdaE => |lambder| {
+            printer.print(lambder.arg);
+            print_exp(lambder.body);
+        },
+        .ApplyE => |funcapp| {
+            print_exp(funcapp.func);
+            print_exp(funcapp.arg);
+        },
     }
 }
 
@@ -107,7 +128,7 @@ pub fn expect_token(expectedT: tokenT, tokens: []const Token) ![]const Token {
 }
 
 // Parser
-pub fn parse_exp(allocator: std.mem.Allocator, tokens: []const Token) !struct { *expE, []const Token } {
+pub fn parse_exp(allocator: std.mem.Allocator, tokens: []const Token) !struct { resexp: *expE, tokenl: []const Token } {
     if (tokens.len == 0) {
         return errors.InputEndsButExpectedAnExpression;
     }
@@ -118,7 +139,7 @@ pub fn parse_exp(allocator: std.mem.Allocator, tokens: []const Token) !struct { 
         .IdT => {
             const exp1 = try allocator.create(expE);
             exp1.* = expE{ .VarE = token.value };
-            return .{ exp1, tokens[1..] };
+            return .{ .resexp = exp1, .tokenl = tokens[1..] };
         },
         .LParenT => {
             var tail = tokens[1..];
@@ -134,23 +155,23 @@ pub fn parse_exp(allocator: std.mem.Allocator, tokens: []const Token) !struct { 
 
                 tail = try expect_token(.PeriodT, tail);
                 const result = try parse_exp(allocator, tail);
-                const body = result[0];
-                tail = result[1];
+                const body = result.resexp;
+                tail = result.tokenl;
 
                 const exp1 = try allocator.create(expE);
                 exp1.* = expE{ .LambdaE = .{ .arg = arg, .body = body } };
                 tail = try expect_token(.RparenT, tail);
-                return .{ exp1, tail };
+                return .{ .resexp = exp1, .tokenl = tail };
             } else {
-                const left = try parse_exp(allocator, tail);
-                tail = left[1];
+                var left = try parse_exp(allocator, tail);
+                tail = left.tokenl;
                 const right = try parse_exp(allocator, tail);
-                tail = right[1];
+                tail = right.tokenl;
                 const exp1 = try allocator.create(expE);
 
-                exp1.* = expE{ .ApplyE = .{ .func = left[0], .arg = right[0] } };
+                exp1.* = expE{ .ApplyE = .{ .func = left.resexp, .arg = right.resexp } };
                 left = try expect_token(.RparenT, tail);
-                return .{ exp1, tail };
+                return .{ .resexp = exp1, .tokenl = tail };
             }
         },
         else => return errors.TokenSeenButExpected,
@@ -161,9 +182,12 @@ pub fn convert_debruijn(allocator: std.mem.Allocator, expr: *expE, bound: std.Ar
     switch (expr.*) {
         .VarE => |term| {
             for (bound.items, 0..) |varname, i| {
-                if (std.mem.eql(u8, varname, term)) {
+                if (std.mem.eql(u8, varname.value, term)) {
                     const exp1 = try allocator.create(expE);
-                    exp1.* = expE{ .VarE = (bound.items.len - i) }; // should return int not string?
+
+                    var buf: [256]u8 = undefined;
+                    const strconv = try std.fmt.bufPrint(&buf, "{}", .{(bound.items.len - i)});
+                    exp1.* = expE{ .VarE = strconv };
                     return exp1;
                 }
             }
