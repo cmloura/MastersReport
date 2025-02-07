@@ -163,7 +163,7 @@ pub fn convert_debruijn(allocator: std.mem.Allocator, expr: *expE, bound: std.Ar
             for (bound.items, 0..) |varname, i| {
                 if (std.mem.eql(u8, varname, term)) {
                     const exp1 = try allocator.create(expE);
-                    exp1.* = expE{ .VarE = (bound.items.len - i) };
+                    exp1.* = expE{ .VarE = (bound.items.len - i) }; // should return int not string?
                     return exp1;
                 }
             }
