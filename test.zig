@@ -21,10 +21,7 @@ pub fn main() !void {
 }
 
 // Token Scanner
-const Token = struct {
-    kind: tokenT,
-    value: []const u8,
-};
+const Token = struct { kind: tokenT, value: union(enum) { strId: []const u8, debruijnId: u8 } };
 
 const expE = union(enum) {
     VarE: []const u8,
@@ -66,9 +63,9 @@ pub fn scan(str: []u8, allocator: std.mem.Allocator) ![]Token {
         if (is_letter(c)) {
             const scannedstr = scanName(whilestr);
             if (std.mem.eql(u8, scannedstr, "lam")) {
-                try tokenList.append(Token{ .kind = tokenT.LamT, .value = "lam" });
+                try tokenList.append(Token{ .kind = tokenT.LamT, .value = .{ .strId = "lam" } });
             } else {
-                try tokenList.append(Token{ .kind = tokenT.IdT, .value = scannedstr });
+                try tokenList.append(Token{ .kind = tokenT.IdT, .value = .{ .strId = scannedstr } });
             }
             whilestr = whilestr[scannedstr.len..];
 
@@ -77,9 +74,9 @@ pub fn scan(str: []u8, allocator: std.mem.Allocator) ![]Token {
             }
         } else {
             switch (c) {
-                '(' => try tokenList.append(Token{ .kind = tokenT.LParenT, .value = "(" }),
-                ')' => try tokenList.append(Token{ .kind = tokenT.RparenT, .value = ")" }),
-                '.' => try tokenList.append(Token{ .kind = tokenT.PeriodT, .value = "." }),
+                '(' => try tokenList.append(Token{ .kind = tokenT.LParenT, .value = .{"("} }),
+                ')' => try tokenList.append(Token{ .kind = tokenT.RparenT, .value = .{")"} }),
+                '.' => try tokenList.append(Token{ .kind = tokenT.PeriodT, .value = .{"."} }),
                 else => {
                     whilestr = whilestr[1..];
                     continue;
@@ -159,3 +156,5 @@ pub fn parse_exp(allocator: std.mem.Allocator, tokens: []const Token) !struct { 
         else => return errors.TokenSeenButExpected,
     }
 }
+
+pub fn convert_debruijn(tokens: []const Token) !void {}
