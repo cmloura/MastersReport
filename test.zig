@@ -21,7 +21,7 @@ pub fn main() !void {
 }
 
 // Token Scanner
-const Token = struct { kind: tokenT, value: union(enum) { strId: []const u8, debruijnId: u8 } };
+const Token = struct { kind: tokenT, value: []const u8 };
 
 const expE = union(enum) {
     VarE: []const u8,
@@ -37,7 +37,7 @@ const tokenT = enum {
     IdT,
 };
 
-const errors = error{ InputEndsButExpectedAnExpression, InputEndsButExpectedToken, TokenSeenButExpected };
+const errors = error{ InputEndsButExpectedAnExpression, InputEndsButExpectedToken, TokenSeenButExpected, UnboundVariableSeen };
 
 pub fn is_letter(c: u8) bool {
     return c >= 'a' and c <= 'z';
@@ -63,9 +63,9 @@ pub fn scan(str: []u8, allocator: std.mem.Allocator) ![]Token {
         if (is_letter(c)) {
             const scannedstr = scanName(whilestr);
             if (std.mem.eql(u8, scannedstr, "lam")) {
-                try tokenList.append(Token{ .kind = tokenT.LamT, .value = .{ .strId = "lam" } });
+                try tokenList.append(Token{ .kind = tokenT.LamT, .value = "lam" });
             } else {
-                try tokenList.append(Token{ .kind = tokenT.IdT, .value = .{ .strId = scannedstr } });
+                try tokenList.append(Token{ .kind = tokenT.IdT, .value = scannedstr });
             }
             whilestr = whilestr[scannedstr.len..];
 
@@ -74,9 +74,9 @@ pub fn scan(str: []u8, allocator: std.mem.Allocator) ![]Token {
             }
         } else {
             switch (c) {
-                '(' => try tokenList.append(Token{ .kind = tokenT.LParenT, .value = .{"("} }),
-                ')' => try tokenList.append(Token{ .kind = tokenT.RparenT, .value = .{")"} }),
-                '.' => try tokenList.append(Token{ .kind = tokenT.PeriodT, .value = .{"."} }),
+                '(' => try tokenList.append(Token{ .kind = tokenT.LParenT, .value = "(" }),
+                ')' => try tokenList.append(Token{ .kind = tokenT.RparenT, .value = ")" }),
+                '.' => try tokenList.append(Token{ .kind = tokenT.PeriodT, .value = "." }),
                 else => {
                     whilestr = whilestr[1..];
                     continue;
@@ -157,4 +157,32 @@ pub fn parse_exp(allocator: std.mem.Allocator, tokens: []const Token) !struct { 
     }
 }
 
-pub fn convert_debruijn(tokens: []const Token) !void {}
+pub fn convert_debruijn(allocator: std.mem.Allocator, expr: *expE, bound: std.ArrayList([]const u8)) !*expE {
+    switch (expr.*) {
+        .VarE => |term| {
+            for (bound.items, 0..) |varname, i| {
+                if (std.mem.eql(u8, varname, term)) {
+                    const exp1 = try allocator.create(expE);
+                    exp1.* = expE{ .VarE = (bound.items.len - i) };
+                    return exp1;
+                }
+            }
+            return errors.UnboundVariableSeen;
+        },
+        .LambdaE => |lambder| {
+            try bound.append(lambder.arg);
+            const body = try convert_debruijn(allocator, lambder.body, bound);
+            bound.pop();
+            const exp1 = try allocator.create(expE);
+            exp1.* = expE{ .LambdaE = .{ .arg = "", .body = body } };
+            return exp1;
+        },
+        .ApplyE => |funcapp| {
+            const func = try convert_debruijn(allocator, funcapp.func, bound);
+            const arg = try convert_debruijn(allocator, funcapp.arg, bound);
+            const exp1 = try allocator.create(expE);
+            exp1.* = expE{ .ApplyE = .{ .func = func, .arg = arg } };
+            return exp1;
+        },
+    }
+}
