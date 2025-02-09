@@ -13,30 +13,31 @@ pub fn main() !void {
     try stdout.print("Expression: {s}\n", .{lambdaexp});
 
     const tlist = try scan(lambdaexp, allocator);
-    defer allocator.free(tlist);
-    errdefer allocator.free(tlist);
 
     for (tlist) |token| {
         try stdout.print("{s} ", .{print_token(token)});
     }
+    try stdout.print("\n\n", .{});
 
-    const expstruct = parse_exp(allocator, tlist);
+    const expstruct = try parse_exp(allocator, tlist);
     try print_exp(expstruct.resexp);
+    defer allocator.free(tlist);
+    errdefer allocator.free(tlist);
 }
 
 pub fn print_exp(headexp: *expE) !void {
     const printer = std.io.getStdOut().writer();
     switch (headexp.*) {
         .VarE => |vare| {
-            printer.print(vare);
+            try printer.print("{s} ", .{vare});
         },
         .LambdaE => |lambder| {
-            printer.print(lambder.arg);
-            print_exp(lambder.body);
+            try printer.print("lam {s} . ", .{lambder.arg});
+            try print_exp(lambder.body);
         },
         .ApplyE => |funcapp| {
-            print_exp(funcapp.func);
-            print_exp(funcapp.arg);
+            try print_exp(funcapp.func);
+            try print_exp(funcapp.arg);
         },
     }
 }
@@ -134,15 +135,17 @@ pub fn parse_exp(allocator: std.mem.Allocator, tokens: []const Token) !struct { 
     }
 
     const token = tokens[0];
+    var tail = tokens[1..];
+    var exp1: *expE = undefined;
 
     switch (token.kind) {
         .IdT => {
-            const exp1 = try allocator.create(expE);
+            exp1 = try allocator.create(expE);
             exp1.* = expE{ .VarE = token.value };
-            return .{ .resexp = exp1, .tokenl = tokens[1..] };
+            //return .{ .resexp = exp1, .tokenl = tokens[1..] };
         },
         .LParenT => {
-            var tail = tokens[1..];
+            tail = tokens[1..];
 
             if (tail.len > 0 and tail[0].kind == .LamT) {
                 tail = tail[1..];
@@ -158,24 +161,42 @@ pub fn parse_exp(allocator: std.mem.Allocator, tokens: []const Token) !struct { 
                 const body = result.resexp;
                 tail = result.tokenl;
 
-                const exp1 = try allocator.create(expE);
+                exp1 = try allocator.create(expE);
                 exp1.* = expE{ .LambdaE = .{ .arg = arg, .body = body } };
                 tail = try expect_token(.RparenT, tail);
-                return .{ .resexp = exp1, .tokenl = tail };
+                //return .{ .resexp = exp1, .tokenl = tail };
             } else {
-                var left = try parse_exp(allocator, tail);
+                const left = try parse_exp(allocator, tail);
                 tail = left.tokenl;
                 const right = try parse_exp(allocator, tail);
                 tail = right.tokenl;
-                const exp1 = try allocator.create(expE);
+                exp1 = try allocator.create(expE);
 
                 exp1.* = expE{ .ApplyE = .{ .func = left.resexp, .arg = right.resexp } };
-                left = try expect_token(.RparenT, tail);
-                return .{ .resexp = exp1, .tokenl = tail };
+                tail = try expect_token(.RparenT, tail);
+                //return .{ .resexp = exp1, .tokenl = tail };
             }
         },
-        else => return errors.TokenSeenButExpected,
+        else => {
+            return errors.TokenSeenButExpected;
+        },
     }
+
+    while (tail.len > 0 and tail[0].kind != .RparenT) {
+        const right2 = try parse_exp(allocator, tail);
+        tail = right2.tokenl;
+
+        const newexp = try allocator.create(expE);
+        newexp.* = expE{ .ApplyE = .{ .func = exp1, .arg = right2.resexp } };
+        exp1 = newexp;
+    }
+
+    if (tail.len >= 1 and tail[0].kind == tokenT.RparenT) {
+        std.debug.print("\n\n\n\n\n{s} {}\n\n\n\n\n", .{ print_token(token), tail.len });
+        tail = try expect_token(.RparenT, tail);
+    }
+
+    return .{ .resexp = exp1, .tokenl = tail };
 }
 
 pub fn convert_debruijn(allocator: std.mem.Allocator, expr: *expE, bound: std.ArrayList([]const u8)) !*expE {
