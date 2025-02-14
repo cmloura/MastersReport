@@ -128,75 +128,66 @@ pub fn expect_token(expectedT: tokenT, tokens: []const Token) ![]const Token {
     }
 }
 
+const ParseResult = struct { resexp: *expE, tokenl: []const Token };
+const ParseError = error{ InputEndsButExpectedAnExpression, TokenSeenButExpected, AllocatorError, OutOfMemory, InputEndsButExpectedToken, UnboundVariableSeen };
+
 // Parser
-pub fn parse_exp(allocator: std.mem.Allocator, tokens: []const Token) !struct { resexp: *expE, tokenl: []const Token } {
-    if (tokens.len == 0) {
-        return errors.InputEndsButExpectedAnExpression;
-    }
-
-    const token = tokens[0];
-    var tail = tokens[1..];
-    var exp1: *expE = undefined;
-
-    switch (token.kind) {
-        .IdT => {
-            exp1 = try allocator.create(expE);
-            exp1.* = expE{ .VarE = token.value };
-            //return .{ .resexp = exp1, .tokenl = tokens[1..] };
-        },
-        .LParenT => {
-            tail = tokens[1..];
-
-            if (tail.len > 0 and tail[0].kind == .LamT) {
-                tail = tail[1..];
-                if (tail.len == 0 or tail[0].kind != .IdT) {
-                    return errors.TokenSeenButExpected;
-                }
-
-                const arg = tail[0].value;
-                tail = tail[1..];
-
-                tail = try expect_token(.PeriodT, tail);
-                const result = try parse_exp(allocator, tail);
-                const body = result.resexp;
-                tail = result.tokenl;
-
-                exp1 = try allocator.create(expE);
-                exp1.* = expE{ .LambdaE = .{ .arg = arg, .body = body } };
-                tail = try expect_token(.RparenT, tail);
-                //return .{ .resexp = exp1, .tokenl = tail };
-            } else {
-                const left = try parse_exp(allocator, tail);
-                tail = left.tokenl;
-                const right = try parse_exp(allocator, tail);
-                tail = right.tokenl;
-                exp1 = try allocator.create(expE);
-
-                exp1.* = expE{ .ApplyE = .{ .func = left.resexp, .arg = right.resexp } };
-                tail = try expect_token(.RparenT, tail);
-                //return .{ .resexp = exp1, .tokenl = tail };
-            }
-        },
-        else => {
-            return errors.TokenSeenButExpected;
-        },
-    }
+pub fn parse_exp(allocator: std.mem.Allocator, tokens: []const Token) ParseError!ParseResult {
+    var tail = tokens;
+    var exp1 = try parse_singular(allocator, &tail);
 
     while (tail.len > 0 and tail[0].kind != .RparenT) {
-        const right2 = try parse_exp(allocator, tail);
-        tail = right2.tokenl;
-
+        const arg = try parse_singular(allocator, &tail);
         const newexp = try allocator.create(expE);
-        newexp.* = expE{ .ApplyE = .{ .func = exp1, .arg = right2.resexp } };
+        newexp.* = expE{ .ApplyE = .{ .func = exp1, .arg = arg } };
         exp1 = newexp;
     }
 
-    if (tail.len >= 1 and tail[0].kind == tokenT.RparenT) {
-        std.debug.print("\n\n\n\n\n{s} {}\n\n\n\n\n", .{ print_token(token), tail.len });
-        tail = try expect_token(.RparenT, tail);
+    return ParseResult{ .resexp = exp1, .tokenl = tail };
+}
+
+pub fn parse_singular(allocator: std.mem.Allocator, tailptr: *[]const Token) ParseError!*expE {
+    var tail = tailptr.*;
+    if (tail.len == 0) {
+        return errors.InputEndsButExpectedAnExpression;
     }
 
-    return .{ .resexp = exp1, .tokenl = tail };
+    const token = tail[0];
+    tail = tail[1..];
+
+    switch (token.kind) {
+        .IdT => {
+            const exp1 = try allocator.create(expE);
+            exp1.* = expE{ .VarE = token.value };
+            tailptr.* = tail;
+            return exp1;
+        },
+        .LParenT => {
+            const sub: ParseResult = try parse_exp(allocator, tail);
+            tail = sub.tokenl;
+            tail = try expect_token(.RparenT, tail);
+            tailptr.* = tail;
+            return sub.resexp;
+        },
+        .LamT => {
+            if (tail.len == 0 or tail[0].kind != .IdT) {
+                return errors.TokenSeenButExpected;
+            }
+            const arg = tail[0].value;
+            tail = tail[1..];
+            tail = try expect_token(.PeriodT, tail);
+            const body = try parse_exp(allocator, tail);
+            tail = body.tokenl;
+
+            const exp1 = try allocator.create(expE);
+            exp1.* = expE{ .LambdaE = .{ .arg = arg, .body = body.resexp } };
+            tailptr.* = tail;
+            return exp1;
+        },
+        else => {
+            return ParseError.TokenSeenButExpected;
+        },
+    }
 }
 
 pub fn convert_debruijn(allocator: std.mem.Allocator, expr: *expE, bound: std.ArrayList([]const u8)) !*expE {
