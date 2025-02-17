@@ -44,7 +44,7 @@ pub fn main() !void {
     try free_exp(allocator, converted_exp);
 }
 
-fn gather_bindings(expr: *expE, global_env: *std.StringHashMap(usize), depth: usize) !void {
+pub fn gather_bindings(expr: *expE, global_env: *std.StringHashMap(usize), depth: usize) !void {
     switch (expr.*) {
         .VarE => |vare| {
             if (!global_env.contains(vare)) {
@@ -279,8 +279,13 @@ pub fn convert_debruijn(allocator: std.mem.Allocator, expr: *expE, bound: *std.A
             }
 
             if (global_env.get(term)) |depth| {
+                if (depth < bound.items.len) {
+                    return errors.UnboundVariableSeen;
+                }
+
+                const index_value: isize = @as(isize, @intCast(depth)) - @as(isize, @intCast(bound.items.len));
+
                 const exp1 = try allocator.create(expE);
-                const index_value = depth + bound.items.len;
                 const strconv = try std.fmt.allocPrint(allocator, "{}", .{index_value});
                 exp1.* = expE{ .VarE = strconv };
                 return exp1;
