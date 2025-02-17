@@ -13,16 +13,72 @@ pub fn main() !void {
     try stdout.print("Expression: {s}\n", .{lambdaexp});
 
     const tlist = try scan(lambdaexp, allocator);
+    defer allocator.free(tlist);
 
     for (tlist) |token| {
         try stdout.print("{s} ", .{print_token(token)});
     }
     try stdout.print("\n\n", .{});
 
+    var global_env = std.StringHashMap(usize).init(allocator);
+    defer global_env.deinit();
+
     const expstruct = try parse_exp(allocator, tlist);
     try print_exp(expstruct.resexp);
-    defer allocator.free(tlist);
-    errdefer allocator.free(tlist);
+
+    try gather_bindings(expstruct.resexp, &global_env, 0);
+
+    var res_str = std.ArrayList([]const u8).init(allocator);
+    defer {
+        for (res_str.items) |item| {
+            allocator.free(item);
+        }
+        res_str.deinit();
+    }
+
+    const converted_exp = try convert_debruijn(allocator, expstruct.resexp, &res_str, &global_env);
+    try stdout.print("\n\nConverted Expression: ", .{});
+    try print_debruijn_exp(converted_exp);
+
+    try free_exp(allocator, expstruct.resexp);
+    try free_exp(allocator, converted_exp);
+}
+
+fn gather_bindings(expr: *expE, global_env: *std.StringHashMap(usize), depth: usize) !void {
+    switch (expr.*) {
+        .VarE => |vare| {
+            if (!global_env.contains(vare)) {
+                try global_env.put(vare, depth);
+            }
+        },
+        .LambdaE => |lambder| {
+            try global_env.put(lambder.arg, depth);
+
+            try gather_bindings(lambder.body, global_env, depth + 1);
+        },
+        .ApplyE => |funcapp| {
+            try gather_bindings(funcapp.func, global_env, depth);
+            try gather_bindings(funcapp.arg, global_env, depth);
+        },
+    }
+}
+
+pub fn free_exp(allocator: std.mem.Allocator, expr: *expE) !void {
+    switch (expr.*) {
+        .VarE => |vare| {
+            if (vare.len > 0 and vare[0] >= '0' and vare[0] <= '9') {
+                allocator.free(vare);
+            }
+        },
+        .LambdaE => |lambder| {
+            try free_exp(allocator, lambder.body);
+        },
+        .ApplyE => |funcapp| {
+            try free_exp(allocator, funcapp.func);
+            try free_exp(allocator, funcapp.arg);
+        },
+    }
+    allocator.destroy(expr);
 }
 
 pub fn print_exp(headexp: *expE) !void {
@@ -38,6 +94,26 @@ pub fn print_exp(headexp: *expE) !void {
         .ApplyE => |funcapp| {
             try print_exp(funcapp.func);
             try print_exp(funcapp.arg);
+        },
+    }
+}
+
+pub fn print_debruijn_exp(headexp: *expE) !void {
+    const printer = std.io.getStdOut().writer();
+    switch (headexp.*) {
+        .VarE => |vare| {
+            try printer.print("{s}", .{vare});
+        },
+        .LambdaE => |lambder| {
+            try printer.print("lam. ", .{});
+            try print_debruijn_exp(lambder.body);
+        },
+        .ApplyE => |funcapp| {
+            try printer.print("(", .{});
+            try print_debruijn_exp(funcapp.func);
+            try printer.print(")(", .{});
+            try print_debruijn_exp(funcapp.arg);
+            try printer.print(")", .{});
         },
     }
 }
@@ -190,32 +266,39 @@ pub fn parse_singular(allocator: std.mem.Allocator, tailptr: *[]const Token) Par
     }
 }
 
-pub fn convert_debruijn(allocator: std.mem.Allocator, expr: *expE, bound: std.ArrayList([]const u8)) !*expE {
+pub fn convert_debruijn(allocator: std.mem.Allocator, expr: *expE, bound: *std.ArrayList([]const u8), global_env: *std.StringHashMap(usize)) !*expE {
     switch (expr.*) {
         .VarE => |term| {
             for (bound.items, 0..) |varname, i| {
-                if (std.mem.eql(u8, varname.value, term)) {
+                if (std.mem.eql(u8, varname, term)) {
                     const exp1 = try allocator.create(expE);
-
-                    var buf: [256]u8 = undefined;
-                    const strconv = try std.fmt.bufPrint(&buf, "{}", .{(bound.items.len - i)});
+                    const strconv = try std.fmt.allocPrint(allocator, "{}", .{(bound.items.len - i)});
                     exp1.* = expE{ .VarE = strconv };
                     return exp1;
                 }
             }
+
+            if (global_env.get(term)) |depth| {
+                const exp1 = try allocator.create(expE);
+                const index_value = depth + bound.items.len;
+                const strconv = try std.fmt.allocPrint(allocator, "{}", .{index_value});
+                exp1.* = expE{ .VarE = strconv };
+                return exp1;
+            }
+
             return errors.UnboundVariableSeen;
         },
         .LambdaE => |lambder| {
             try bound.append(lambder.arg);
-            const body = try convert_debruijn(allocator, lambder.body, bound);
-            bound.pop();
+            const body = try convert_debruijn(allocator, lambder.body, bound, global_env);
+            _ = bound.pop();
             const exp1 = try allocator.create(expE);
             exp1.* = expE{ .LambdaE = .{ .arg = "", .body = body } };
             return exp1;
         },
         .ApplyE => |funcapp| {
-            const func = try convert_debruijn(allocator, funcapp.func, bound);
-            const arg = try convert_debruijn(allocator, funcapp.arg, bound);
+            const func = try convert_debruijn(allocator, funcapp.func, bound, global_env);
+            const arg = try convert_debruijn(allocator, funcapp.arg, bound, global_env);
             const exp1 = try allocator.create(expE);
             exp1.* = expE{ .ApplyE = .{ .func = func, .arg = arg } };
             return exp1;
