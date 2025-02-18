@@ -289,7 +289,8 @@ pub fn convert_debruijn(allocator: std.mem.Allocator, expr: *expE, dept_dict: *s
         .LambdaE => |lambder| {
             std.debug.print("Processing lambda for {s}\n", .{lambder.arg});
             var temp = std.StringHashMap(usize).init(allocator);
-            while (it.next()) |entry| {
+            var it2 = dept_dict.iterator();
+            while (it2.next()) |entry| {
                 if (dept_dict.get(entry.key_ptr.*)) |value| {
                     try temp.put(entry.key_ptr.*, value + 1);
                 } else {
@@ -297,9 +298,9 @@ pub fn convert_debruijn(allocator: std.mem.Allocator, expr: *expE, dept_dict: *s
                 }
             }
 
-            try temp.put(lambder.arg, depth);
+            try temp.put(lambder.arg, 1);
 
-            std.debug.print("Added {s} to dept_dict with depth {any}\n", .{ lambder.arg, depth });
+            std.debug.print("Added {s} to dept_dict with depth {any}\n", .{ lambder.arg, 1 });
 
             const new_exp = try convert_debruijn(allocator, lambder.body, &temp, depth);
 
@@ -310,7 +311,7 @@ pub fn convert_debruijn(allocator: std.mem.Allocator, expr: *expE, dept_dict: *s
             return exp2;
         },
         .ApplyE => |app| {
-            std.debug.print("Processing application\n", .{});
+            std.debug.print("Processing function application\n", .{});
 
             const right = try convert_debruijn(allocator, app.func, dept_dict, depth);
             const left = try convert_debruijn(allocator, app.arg, dept_dict, depth);
