@@ -20,23 +20,23 @@ pub fn main() !void {
     }
     try stdout.print("\n\n", .{});
 
-    var global_env = std.StringHashMap(usize).init(allocator);
-    defer global_env.deinit();
+    var dept_dict = std.StringHashMap(usize).init(allocator);
+    defer dept_dict.deinit();
 
     const expstruct = try parse_exp(allocator, tlist);
     try print_exp(expstruct.resexp);
 
-    try gather_bindings(expstruct.resexp, &global_env, 0);
+    //try gather_bindings(expstruct.resexp, &dept_dict, 0);
 
-    var res_str = std.ArrayList([]const u8).init(allocator);
-    defer {
-        for (res_str.items) |item| {
-            allocator.free(item);
-        }
-        res_str.deinit();
-    }
+    // var res_str = std.ArrayList([]const u8).init(allocator);
+    // defer {
+    //     for (res_str.items) |item| {
+    //         allocator.free(item);
+    //     }
+    //     res_str.deinit();
+    // }
 
-    const converted_exp = try convert_debruijn(allocator, expstruct.resexp, &res_str, &global_env);
+    const converted_exp = try convert_debruijn(allocator, expstruct.resexp, &dept_dict, 1);
     try stdout.print("\n\nConverted Expression: ", .{});
     try print_debruijn_exp(converted_exp);
 
@@ -44,24 +44,24 @@ pub fn main() !void {
     try free_exp(allocator, converted_exp);
 }
 
-pub fn gather_bindings(expr: *expE, global_env: *std.StringHashMap(usize), depth: usize) !void {
-    switch (expr.*) {
-        .VarE => |vare| {
-            if (!global_env.contains(vare)) {
-                try global_env.put(vare, depth);
-            }
-        },
-        .LambdaE => |lambder| {
-            try global_env.put(lambder.arg, depth);
+// pub fn gather_bindings(expr: *expE, dept_dict: *std.StringHashMap(usize), depth: usize) !void {
+//     switch (expr.*) {
+//         .VarE => |vare| {
+//             if (!dept_dict.contains(vare)) {
+//                 try dept_dict.put(vare, depth);
+//             }
+//         },
+//         .LambdaE => |lambder| {
+//             try dept_dict.put(lambder.arg, depth);
 
-            try gather_bindings(lambder.body, global_env, depth + 1);
-        },
-        .ApplyE => |funcapp| {
-            try gather_bindings(funcapp.func, global_env, depth);
-            try gather_bindings(funcapp.arg, global_env, depth);
-        },
-    }
-}
+//             try gather_bindings(lambder.body, dept_dict, depth + 1);
+//         },
+//         .ApplyE => |funcapp| {
+//             try gather_bindings(funcapp.func, dept_dict, depth);
+//             try gather_bindings(funcapp.arg, dept_dict, depth);
+//         },
+//     }
+// }
 
 pub fn free_exp(allocator: std.mem.Allocator, expr: *expE) !void {
     switch (expr.*) {
@@ -266,46 +266,59 @@ pub fn parse_singular(allocator: std.mem.Allocator, tailptr: *[]const Token) Par
     }
 }
 
-pub fn convert_debruijn(allocator: std.mem.Allocator, expr: *expE, bound: *std.ArrayList([]const u8), global_env: *std.StringHashMap(usize)) !*expE {
+pub fn convert_debruijn(allocator: std.mem.Allocator, expr: *expE, dept_dict: *std.StringHashMap(usize), depth: usize) !*expE {
+    std.debug.print("Entering convert_debruijn with depth {any} and dict:\n", .{depth});
+    var it = dept_dict.iterator();
+    while (it.next()) |entry| {
+        std.debug.print("  {any} : {any}\n", .{ entry.key_ptr.*, entry.value_ptr.* });
+    }
+
     switch (expr.*) {
-        .VarE => |term| {
-            for (bound.items, 0..) |varname, i| {
-                if (std.mem.eql(u8, varname, term)) {
-                    const exp1 = try allocator.create(expE);
-                    const strconv = try std.fmt.allocPrint(allocator, "{}", .{(bound.items.len - i)});
-                    exp1.* = expE{ .VarE = strconv };
-                    return exp1;
-                }
-            }
-
-            if (global_env.get(term)) |depth| {
-                if (depth < bound.items.len) {
-                    return errors.UnboundVariableSeen;
-                }
-
-                const index_value: isize = @as(isize, @intCast(depth)) - @as(isize, @intCast(bound.items.len));
-
+        .VarE => |item| {
+            if (dept_dict.get(item)) |temp_new_value| {
+                std.debug.print("Variable {s} found with depth {any}\n", .{ item, temp_new_value });
+                const new_value = try std.fmt.allocPrint(allocator, "{d}", .{temp_new_value});
                 const exp1 = try allocator.create(expE);
-                const strconv = try std.fmt.allocPrint(allocator, "{}", .{index_value});
-                exp1.* = expE{ .VarE = strconv };
+                exp1.* = expE{ .VarE = new_value };
                 return exp1;
+            } else {
+                std.debug.print("Bruh: Variable {s} is unbound\n", .{item});
+                return error.UnboundVariableSeen;
             }
-
-            return errors.UnboundVariableSeen;
         },
         .LambdaE => |lambder| {
-            try bound.append(lambder.arg);
-            const body = try convert_debruijn(allocator, lambder.body, bound, global_env);
-            _ = bound.pop();
-            const exp1 = try allocator.create(expE);
-            exp1.* = expE{ .LambdaE = .{ .arg = "", .body = body } };
-            return exp1;
+            std.debug.print("Processing lambda for {s}\n", .{lambder.arg});
+            var temp = std.StringHashMap(usize).init(allocator);
+            while (it.next()) |entry| {
+                if (dept_dict.get(entry.key_ptr.*)) |value| {
+                    try temp.put(entry.key_ptr.*, value + 1);
+                } else {
+                    try temp.put(entry.key_ptr.*, 1);
+                }
+            }
+
+            try temp.put(lambder.arg, depth);
+
+            std.debug.print("Added {s} to dept_dict with depth {any}\n", .{ lambder.arg, depth });
+
+            const new_exp = try convert_debruijn(allocator, lambder.body, &temp, depth);
+
+            const exp2 = try allocator.create(expE);
+            exp2.* = expE{ .LambdaE = .{ .arg = "", .body = new_exp } };
+
+            std.debug.print("Exiting lambda for {s}\n", .{lambder.arg});
+            return exp2;
         },
-        .ApplyE => |funcapp| {
-            const func = try convert_debruijn(allocator, funcapp.func, bound, global_env);
-            const arg = try convert_debruijn(allocator, funcapp.arg, bound, global_env);
+        .ApplyE => |app| {
+            std.debug.print("Processing application\n", .{});
+
+            const right = try convert_debruijn(allocator, app.func, dept_dict, depth);
+            const left = try convert_debruijn(allocator, app.arg, dept_dict, depth);
+
             const exp1 = try allocator.create(expE);
-            exp1.* = expE{ .ApplyE = .{ .func = func, .arg = arg } };
+            exp1.* = expE{ .ApplyE = .{ .arg = left, .func = right } };
+
+            std.debug.print("Exiting application\n", .{});
             return exp1;
         },
     }
