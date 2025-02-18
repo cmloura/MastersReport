@@ -267,27 +267,18 @@ pub fn parse_singular(allocator: std.mem.Allocator, tailptr: *[]const Token) Par
 }
 
 pub fn convert_debruijn(allocator: std.mem.Allocator, expr: *expE, dept_dict: *std.StringHashMap(usize), depth: usize) !*expE {
-    std.debug.print("Entering convert_debruijn with depth {any} and dict:\n", .{depth});
-    var it = dept_dict.iterator();
-    while (it.next()) |entry| {
-        std.debug.print("  {any} : {any}\n", .{ entry.key_ptr.*, entry.value_ptr.* });
-    }
-
     switch (expr.*) {
         .VarE => |item| {
             if (dept_dict.get(item)) |temp_new_value| {
-                std.debug.print("Variable {s} found with depth {any}\n", .{ item, temp_new_value });
                 const new_value = try std.fmt.allocPrint(allocator, "{d}", .{temp_new_value});
                 const exp1 = try allocator.create(expE);
                 exp1.* = expE{ .VarE = new_value };
                 return exp1;
             } else {
-                std.debug.print("Bruh: Variable {s} is unbound\n", .{item});
                 return error.UnboundVariableSeen;
             }
         },
         .LambdaE => |lambder| {
-            std.debug.print("Processing lambda for {s}\n", .{lambder.arg});
             var temp = std.StringHashMap(usize).init(allocator);
             var it2 = dept_dict.iterator();
             while (it2.next()) |entry| {
@@ -300,26 +291,20 @@ pub fn convert_debruijn(allocator: std.mem.Allocator, expr: *expE, dept_dict: *s
 
             try temp.put(lambder.arg, 1);
 
-            std.debug.print("Added {s} to dept_dict with depth {any}\n", .{ lambder.arg, 1 });
-
+            dept_dict.* = temp;
             const new_exp = try convert_debruijn(allocator, lambder.body, &temp, depth);
 
             const exp2 = try allocator.create(expE);
             exp2.* = expE{ .LambdaE = .{ .arg = "", .body = new_exp } };
 
-            std.debug.print("Exiting lambda for {s}\n", .{lambder.arg});
             return exp2;
         },
         .ApplyE => |app| {
-            std.debug.print("Processing function application\n", .{});
-
             const right = try convert_debruijn(allocator, app.func, dept_dict, depth);
             const left = try convert_debruijn(allocator, app.arg, dept_dict, depth);
 
             const exp1 = try allocator.create(expE);
             exp1.* = expE{ .ApplyE = .{ .arg = left, .func = right } };
-
-            std.debug.print("Exiting application\n", .{});
             return exp1;
         },
     }
