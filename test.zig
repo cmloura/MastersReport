@@ -26,16 +26,6 @@ pub fn main() !void {
     const expstruct = try parse_exp(allocator, tlist);
     try print_exp(expstruct.resexp);
 
-    //try gather_bindings(expstruct.resexp, &dept_dict, 0);
-
-    // var res_str = std.ArrayList([]const u8).init(allocator);
-    // defer {
-    //     for (res_str.items) |item| {
-    //         allocator.free(item);
-    //     }
-    //     res_str.deinit();
-    // }
-
     const converted_exp = try convert_debruijn(allocator, expstruct.resexp, &dept_dict, 1);
     try stdout.print("\n\nConverted Expression: ", .{});
     try print_debruijn_exp(converted_exp);
@@ -43,25 +33,6 @@ pub fn main() !void {
     try free_exp(allocator, expstruct.resexp);
     try free_exp(allocator, converted_exp);
 }
-
-// pub fn gather_bindings(expr: *expE, dept_dict: *std.StringHashMap(usize), depth: usize) !void {
-//     switch (expr.*) {
-//         .VarE => |vare| {
-//             if (!dept_dict.contains(vare)) {
-//                 try dept_dict.put(vare, depth);
-//             }
-//         },
-//         .LambdaE => |lambder| {
-//             try dept_dict.put(lambder.arg, depth);
-
-//             try gather_bindings(lambder.body, dept_dict, depth + 1);
-//         },
-//         .ApplyE => |funcapp| {
-//             try gather_bindings(funcapp.func, dept_dict, depth);
-//             try gather_bindings(funcapp.arg, dept_dict, depth);
-//         },
-//     }
-// }
 
 pub fn free_exp(allocator: std.mem.Allocator, expr: *expE) !void {
     switch (expr.*) {
@@ -126,6 +97,8 @@ const expE = union(enum) {
     LambdaE: struct { arg: []const u8, body: *expE },
     ApplyE: struct { func: *expE, arg: *expE },
 };
+
+const sigma = union(enum) { sigma1: struct { index: usize, M: *expE, N: expE }, sigma2: struct { index: usize, M1: *expE, M2: *expE, N: *expE } };
 
 const tokenT = enum {
     LamT,
@@ -307,5 +280,23 @@ pub fn convert_debruijn(allocator: std.mem.Allocator, expr: *expE, dept_dict: *s
             exp1.* = expE{ .ApplyE = .{ .arg = left, .func = right } };
             return exp1;
         },
+    }
+}
+
+pub fn beta_reduce(allocator: std.mem.Allocator, expr: *expE) void {
+    switch (expr.*) {
+        .ApplyE => |app| {
+            if (app.arg.* == .LambdaE and app.func.* == .LambdaE) {
+                _ = reduce(allocator, app.arg, app.func, 0);
+            } else {}
+        },
+    }
+}
+
+pub fn reduce(allocator: std.mem.Allocator, left: *expE, right: *expE, init_index: usize) *sigma {
+    var newsigma = undefined;
+    if (left.* == .LambdaE) {
+        newsigma = try allocator.create(sigma);
+        newsigma.* = sigma{ .sigma1 = .{ .index = init_index, .M = left, .N = right } };
     }
 }
