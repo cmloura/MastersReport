@@ -30,6 +30,10 @@ pub fn main() !void {
     try stdout.print("\n\nConverted Expression: ", .{});
     try print_debruijn_exp(converted_exp);
 
+    const reduced_debruijn = try beta_reduce(allocator, 0, converted_exp);
+    std.debug.print("\n\nReduced De Bruijn: \n\n", .{});
+    try print_exp(reduced_debruijn);
+
     try free_exp(allocator, expstruct.resexp);
     try free_exp(allocator, converted_exp);
 }
@@ -59,7 +63,7 @@ pub fn print_exp(headexp: *expE) !void {
             try printer.print("{s} ", .{vare});
         },
         .LambdaE => |lambder| {
-            try printer.print("lam {s} . ", .{lambder.arg});
+            try printer.print("lam{s} . ", .{lambder.arg});
             try print_exp(lambder.body);
         },
         .ApplyE => |funcapp| {
@@ -283,20 +287,56 @@ pub fn convert_debruijn(allocator: std.mem.Allocator, expr: *expE, dept_dict: *s
     }
 }
 
-pub fn beta_reduce(allocator: std.mem.Allocator, expr: *expE) void {
+// Evaluation
+const location = u8;
+const identifier = []u8;
+
+pub fn beta_reduce(allocator: std.mem.Allocator, depth: usize, expr: *expE) !*expE {
     switch (expr.*) {
+        .VarE => return expr,
+        .LambdaE => |lambder| {
+            const newbod = try beta_reduce(allocator, depth + 1, lambder.body);
+            const exp1 = try allocator.create(expE);
+            exp1.* = expE{ .LambdaE = .{ .arg = lambder.arg, .body = newbod } };
+            return exp1;
+        },
         .ApplyE => |app| {
-            if (app.arg.* == .LambdaE and app.func.* == .LambdaE) {
-                _ = reduce(allocator, app.arg, app.func, 0);
-            } else {}
+            const newfunc = try beta_reduce(allocator, depth, app.func);
+            const newarg = try beta_reduce(allocator, depth, app.arg);
+
+            if (newfunc.* == .LambdaE) {
+                return try reduce(allocator, newfunc.LambdaE.body, newarg, 1);
+            } else {
+                const exp1 = try allocator.create(expE);
+                exp1.* = expE{ .ApplyE = .{ .func = newfunc, .arg = newarg } };
+                return exp1;
+            }
         },
     }
 }
 
-pub fn reduce(allocator: std.mem.Allocator, left: *expE, right: *expE, init_index: usize) *sigma {
-    var newsigma = undefined;
-    if (left.* == .LambdaE) {
-        newsigma = try allocator.create(sigma);
-        newsigma.* = sigma{ .sigma1 = .{ .index = init_index, .M = left, .N = right } };
+pub fn reduce(allocator: std.mem.Allocator, M: *expE, N: *expE, index: usize) !*expE {
+    switch (M.*) {
+        .VarE => |vare| {
+            const var_index = try std.fmt.parseInt(usize, vare, 10);
+            if (var_index == index) {
+                return N;
+            } else {
+                return M;
+            }
+        },
+        .LambdaE => |lambder| {
+            const newbod = try reduce(allocator, lambder.body, N, index + 1);
+            const exp1 = try allocator.create(expE);
+            exp1.* = expE{ .LambdaE = .{ .arg = lambder.arg, .body = newbod } };
+            return exp1;
+        },
+        .ApplyE => |app| {
+            const newfunc = try reduce(allocator, app.func, N, index);
+            const newarg = try reduce(allocator, app.arg, N, index);
+            const exp1 = try allocator.create(expE);
+            exp1.* = expE{ .ApplyE = .{ .func = newfunc, .arg = newarg } };
+            return exp1;
+        },
     }
 }
