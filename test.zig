@@ -26,7 +26,7 @@ pub fn main() !void {
     const expstruct = try parse_exp(allocator, tlist);
     try print_exp(expstruct.resexp);
 
-    const converted_exp = try convert_debruijn(allocator, expstruct.resexp, &dept_dict, 1);
+    const converted_exp = try convert_debruijn(allocator, expstruct.resexp, &dept_dict);
     try stdout.print("\n\nConverted Expression: ", .{});
     try print_debruijn_exp(converted_exp);
 
@@ -243,7 +243,7 @@ pub fn parse_singular(allocator: std.mem.Allocator, tailptr: *[]const Token) Par
     }
 }
 
-pub fn convert_debruijn(allocator: std.mem.Allocator, expr: *expE, dept_dict: *std.StringHashMap(usize), depth: usize) !*expE {
+pub fn convert_debruijn(allocator: std.mem.Allocator, expr: *expE, dept_dict: *std.StringHashMap(usize)) !*expE {
     switch (expr.*) {
         .VarE => |item| {
             if (dept_dict.get(item)) |temp_new_value| {
@@ -256,20 +256,26 @@ pub fn convert_debruijn(allocator: std.mem.Allocator, expr: *expE, dept_dict: *s
             }
         },
         .LambdaE => |lambder| {
-            var temp = std.StringHashMap(usize).init(allocator);
             var it2 = dept_dict.iterator();
             while (it2.next()) |entry| {
                 if (dept_dict.get(entry.key_ptr.*)) |value| {
-                    try temp.put(entry.key_ptr.*, value + 1);
+                    try dept_dict.put(entry.key_ptr.*, value + 1);
                 } else {
-                    try temp.put(entry.key_ptr.*, 1);
+                    try dept_dict.put(entry.key_ptr.*, 1);
                 }
             }
 
-            try temp.put(lambder.arg, 1);
+            try dept_dict.put(lambder.arg, 1);
 
-            dept_dict.* = temp;
-            const new_exp = try convert_debruijn(allocator, lambder.body, &temp, depth);
+            var it3 = dept_dict.iterator();
+            std.debug.print("\n", .{});
+            while (it3.next()) |entry| {
+                std.debug.print("Lambder dick has key {s} and value {d}\n", .{ entry.key_ptr.*, entry.value_ptr.* });
+            }
+            std.debug.print("Apply Dick: {*}", .{dept_dict});
+            std.debug.print("\n\n", .{});
+
+            const new_exp = try convert_debruijn(allocator, lambder.body, dept_dict);
 
             const exp2 = try allocator.create(expE);
             exp2.* = expE{ .LambdaE = .{ .arg = "", .body = new_exp } };
@@ -277,11 +283,18 @@ pub fn convert_debruijn(allocator: std.mem.Allocator, expr: *expE, dept_dict: *s
             return exp2;
         },
         .ApplyE => |app| {
-            const right = try convert_debruijn(allocator, app.func, dept_dict, depth);
-            const left = try convert_debruijn(allocator, app.arg, dept_dict, depth);
+            const left = try convert_debruijn(allocator, app.func, dept_dict);
+            var it3 = dept_dict.iterator();
+            std.debug.print("\n", .{});
+            while (it3.next()) |entry| {
+                std.debug.print("Apply dictionary has key {s} and value {d}\n", .{ entry.key_ptr.*, entry.value_ptr.* });
+            }
+            std.debug.print("Lambder Dick: {*}", .{dept_dict});
+            std.debug.print("\n\n", .{});
+            const right = try convert_debruijn(allocator, app.arg, dept_dict);
 
             const exp1 = try allocator.create(expE);
-            exp1.* = expE{ .ApplyE = .{ .arg = left, .func = right } };
+            exp1.* = expE{ .ApplyE = .{ .arg = right, .func = left } };
             return exp1;
         },
     }
@@ -339,4 +352,59 @@ pub fn reduce(allocator: std.mem.Allocator, M: *expE, N: *expE, index: usize) !*
             return exp1;
         },
     }
+}
+
+// Krivine Machine
+const Closure = struct {
+    exp: *expE,
+    env: Environment,
+};
+
+const Environment = struct {
+    head: ?Closure,
+    next: ?*Environment,
+
+    pub fn init(allocator: std.mem.Allocator, head: ?Closure, next: ?*Environment) !*Environment {
+        const env = try allocator.create(Environment);
+        env.* = .{ .head = head, .next = next };
+        return env;
+    }
+};
+
+pub fn Stack(comptime T: type) type {
+    return struct {
+        stack: std.ArrayList(T),
+        const Self = @This();
+
+        pub fn init(allocator: std.mem.Allocator) Self {
+            return Self{ .stack = std.ArrayList(T).init(allocator) };
+        }
+
+        pub fn deinit(self: *Self) void {
+            self.stack.deinit();
+        }
+
+        pub fn push(self: *Self, val: T) !void {
+            try self.stack.append(val);
+        }
+
+        pub fn pop(self: *Self) ?T {
+            return self.stack.popOrNull();
+        }
+
+        pub fn peek(self: *Self) ?T {
+            if (self.stack.items.len == 0) {
+                return null;
+            }
+            return self.stack.items[self.stack.items.len - 1];
+        }
+
+        pub fn count(self: *Self) usize {
+            return self.stack.items.len;
+        }
+
+        pub fn isEmpty(self: *Self) bool {
+            return self.stack.items.len == 0;
+        }
+    };
 }
