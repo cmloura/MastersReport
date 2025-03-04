@@ -34,6 +34,14 @@ pub fn main() !void {
     std.debug.print("\n\nReduced De Bruijn: \n\n", .{});
     try print_exp(reduced_debruijn);
 
+    var stack = Stack(struct { c: *expE, oldenv: *Environment }).init(allocator);
+    defer stack.deinit();
+
+    const env = try Environment.init(allocator, null, null);
+    var state = State{ .code = reduced_debruijn, .env = env, .stack = &stack };
+
+    try evalStep(allocator, &state);
+
     try free_exp(allocator, expstruct.resexp);
     try free_exp(allocator, converted_exp);
 }
@@ -369,7 +377,27 @@ const Environment = struct {
         env.* = .{ .head = head, .next = next };
         return env;
     }
+
+    pub fn lookup(self: *Environment, index: usize) ?Closure {
+        var cur = self;
+        var i = index;
+
+        while (true) {
+            if (i == 0) {
+                return cur.head;
+            }
+
+            if (cur.next) |next| {
+                cur = next;
+                i = i - 1;
+            } else {
+                return null;
+            }
+        }
+    }
 };
+
+const State = struct { code: *expE, env: *Environment, stack: *Stack(struct { c: *expE, oldenv: *Environment }) };
 
 pub fn Stack(comptime T: type) type {
     return struct {
@@ -407,4 +435,31 @@ pub fn Stack(comptime T: type) type {
             return self.stack.items.len == 0;
         }
     };
+}
+
+pub fn evalStep(allocator: std.mem.Allocator, state: *State) !bool {
+    switch (state.code.*) {
+        .VarE => {
+            if (state.env.lookup(0)) |closure| {
+                state.code = closure.exp;
+                state.env = closure.env;
+            } else {
+                return errors.UnboundVariableSeen;
+            }
+        },
+        .LambdaE => |lambder| {
+            if (state.stack.pop()) |top| {
+                const env1 = try Environment.init(allocator, .{ .exp = top.c, .env = top.oldenv }, state.env);
+                state.code = lambder.body;
+                state.env = env1;
+            } else {
+                return false;
+            }
+        },
+        .ApplyE => |app| {
+            try state.stack.push(.{ .c = app.arg, .oldenv = state.env });
+            state.code = app.func;
+        },
+    }
+    return true;
 }
