@@ -30,17 +30,20 @@ pub fn main() !void {
     try stdout.print("\n\nConverted Expression: ", .{});
     try print_debruijn_exp(converted_exp);
 
-    const reduced_debruijn = try beta_reduce(allocator, 0, converted_exp);
-    std.debug.print("\n\nReduced De Bruijn: \n\n", .{});
-    try print_exp(reduced_debruijn);
+    // const reduced_debruijn = try beta_reduce(allocator, 0, converted_exp);
+    // std.debug.print("\n\nReduced De Bruijn: \n\n", .{});
+    // try print_exp(reduced_debruijn);
 
-    var stack = Stack(struct { c: *expE, oldenv: *Environment }).init(allocator);
+    var stack = Stack(StackType).init(allocator);
     defer stack.deinit();
 
     const env = try Environment.init(allocator, null, null);
-    var state = State{ .code = reduced_debruijn, .env = env, .stack = &stack };
+    var state = State{ .code = converted_exp, .env = env, .stack = &stack };
 
-    try evalStep(allocator, &state);
+    while (try evalStep(allocator, &state)) {}
+    try stdout.print("\n\nFinal Result: ", .{});
+    try print_debruijn_exp(state.code);
+    try stdout.print("\n", .{});
 
     try free_exp(allocator, expstruct.resexp);
     try free_exp(allocator, converted_exp);
@@ -308,7 +311,7 @@ pub fn convert_debruijn(allocator: std.mem.Allocator, expr: *expE, dept_dict: *s
     }
 }
 
-// Evaluation
+// Reduction
 const location = u8;
 const identifier = []u8;
 
@@ -365,20 +368,20 @@ pub fn reduce(allocator: std.mem.Allocator, M: *expE, N: *expE, index: usize) !*
 // Krivine Machine
 const Closure = struct {
     exp: *expE,
-    env: Environment,
+    env: *Environment,
 };
 
 const Environment = struct {
-    head: ?Closure,
+    head: ?*Closure,
     next: ?*Environment,
 
-    pub fn init(allocator: std.mem.Allocator, head: ?Closure, next: ?*Environment) !*Environment {
+    pub fn init(allocator: std.mem.Allocator, head: ?*Closure, next: ?*Environment) !*Environment {
         const env = try allocator.create(Environment);
         env.* = .{ .head = head, .next = next };
         return env;
     }
 
-    pub fn lookup(self: *Environment, index: usize) ?Closure {
+    pub fn lookup(self: *Environment, index: usize) ?*Closure {
         var cur = self;
         var i = index;
 
@@ -397,7 +400,9 @@ const Environment = struct {
     }
 };
 
-const State = struct { code: *expE, env: *Environment, stack: *Stack(struct { c: *expE, oldenv: *Environment }) };
+const StackType = struct { c: *expE, oldenv: *Environment };
+
+const State = struct { code: *expE, env: *Environment, stack: *Stack(StackType) };
 
 pub fn Stack(comptime T: type) type {
     return struct {
@@ -449,7 +454,9 @@ pub fn evalStep(allocator: std.mem.Allocator, state: *State) !bool {
         },
         .LambdaE => |lambder| {
             if (state.stack.pop()) |top| {
-                const env1 = try Environment.init(allocator, .{ .exp = top.c, .env = top.oldenv }, state.env);
+                const closure = try allocator.create(Closure);
+                closure.* = .{ .exp = top.c, .env = top.oldenv };
+                const env1 = try Environment.init(allocator, closure, state.env);
                 state.code = lambder.body;
                 state.env = env1;
             } else {
