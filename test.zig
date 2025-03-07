@@ -267,26 +267,20 @@ pub fn convert_debruijn(allocator: std.mem.Allocator, expr: *expE, dept_dict: *s
             }
         },
         .LambdaE => |lambder| {
+            var temp = std.StringHashMap(usize).init(allocator);
             var it2 = dept_dict.iterator();
             while (it2.next()) |entry| {
                 if (dept_dict.get(entry.key_ptr.*)) |value| {
-                    try dept_dict.put(entry.key_ptr.*, value + 1);
+                    try temp.put(entry.key_ptr.*, value + 1);
                 } else {
-                    try dept_dict.put(entry.key_ptr.*, 1);
+                    try temp.put(entry.key_ptr.*, 1);
                 }
             }
 
-            try dept_dict.put(lambder.arg, 1);
+            try temp.put(lambder.arg, 1);
 
-            var it3 = dept_dict.iterator();
-            std.debug.print("\n", .{});
-            while (it3.next()) |entry| {
-                std.debug.print("Lambder dick has key {s} and value {d}\n", .{ entry.key_ptr.*, entry.value_ptr.* });
-            }
-            std.debug.print("Apply Dick: {*}", .{dept_dict});
-            std.debug.print("\n\n", .{});
-
-            const new_exp = try convert_debruijn(allocator, lambder.body, dept_dict);
+            dept_dict.* = temp;
+            const new_exp = try convert_debruijn(allocator, lambder.body, &temp);
 
             const exp2 = try allocator.create(expE);
             exp2.* = expE{ .LambdaE = .{ .arg = "", .body = new_exp } };
@@ -294,14 +288,9 @@ pub fn convert_debruijn(allocator: std.mem.Allocator, expr: *expE, dept_dict: *s
             return exp2;
         },
         .ApplyE => |app| {
-            const left = try convert_debruijn(allocator, app.func, dept_dict);
-            var it3 = dept_dict.iterator();
-            std.debug.print("\n", .{});
-            while (it3.next()) |entry| {
-                std.debug.print("Apply dictionary has key {s} and value {d}\n", .{ entry.key_ptr.*, entry.value_ptr.* });
-            }
-            std.debug.print("Lambder Dick: {*}", .{dept_dict});
-            std.debug.print("\n\n", .{});
+            var left_dict = try dept_dict.clone();
+            defer left_dict.deinit();
+            const left = try convert_debruijn(allocator, app.func, &left_dict);
             const right = try convert_debruijn(allocator, app.arg, dept_dict);
 
             const exp1 = try allocator.create(expE);
