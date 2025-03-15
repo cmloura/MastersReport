@@ -5,7 +5,7 @@ pub fn main() !void {
     const stdout = std.io.getStdOut().writer();
     const allocator = std.heap.page_allocator;
 
-    var buf: [100]u8 = undefined;
+    var buf: [250]u8 = undefined;
 
     try stdout.print("Enter a lambda expression: ", .{});
 
@@ -29,6 +29,7 @@ pub fn main() !void {
     const converted_exp = try convert_debruijn(allocator, expstruct.resexp, &dept_dict);
     try stdout.print("\n\nConverted Expression: ", .{});
     try print_debruijn_exp(converted_exp);
+    try stdout.print("\n\n", .{});
 
     // const reduced_debruijn = try beta_reduce(allocator, 0, converted_exp);
     // std.debug.print("\n\nReduced De Bruijn: \n\n", .{});
@@ -432,6 +433,7 @@ pub fn Stack(comptime T: type) type {
 pub fn evalStep(allocator: std.mem.Allocator, state: *State) !bool {
     switch (state.code.*) {
         .VarE => {
+            std.debug.print("In the VarE portion of Krivine Machine\n", .{});
             if (state.env.lookup(0)) |closure| {
                 state.code = closure.exp;
                 state.env = closure.env;
@@ -441,16 +443,23 @@ pub fn evalStep(allocator: std.mem.Allocator, state: *State) !bool {
         },
         .LambdaE => |lambder| {
             if (state.stack.pop()) |top| {
+                std.debug.print("Popping {any} from the stack!\n", .{top});
                 const closure = try allocator.create(Closure);
                 closure.* = .{ .exp = top.c, .env = top.oldenv };
                 const env1 = try Environment.init(allocator, closure, state.env);
                 state.code = lambder.body;
                 state.env = env1;
             } else {
+                const reduced_expr = try beta_reduce(allocator, 0, lambder.body);
+                const new_lambda_exp = try allocator.create(expE);
+                new_lambda_exp.* = .{ .LambdaE = .{ .arg = "", .body = reduced_expr } };
+                state.code = new_lambda_exp;
+                std.debug.print("Nothing on the stack. Returning False\n", .{});
                 return false;
             }
         },
         .ApplyE => |app| {
+            std.debug.print("In the ApplyE portion of Krivine Machine\n", .{});
             try state.stack.push(.{ .c = app.arg, .oldenv = state.env });
             state.code = app.func;
         },
