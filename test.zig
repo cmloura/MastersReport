@@ -279,6 +279,8 @@ pub fn convert_debruijn(allocator: std.mem.Allocator, expr: *expE, dept_dict: *s
             }
 
             try temp.put(lambder.arg, 1);
+
+            dept_dict.* = temp;
             const new_exp = try convert_debruijn(allocator, lambder.body, &temp);
 
             const exp2 = try allocator.create(expE);
