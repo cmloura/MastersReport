@@ -4,6 +4,8 @@ pub fn main() !void {
     const stdin = std.io.getStdIn().reader();
     const stdout = std.io.getStdOut().writer();
     const allocator = std.heap.page_allocator;
+    var freed_nodes = std.AutoHashMap(*expE, void).init(allocator);
+    defer freed_nodes.deinit();
 
     var buf: [100]u8 = undefined;
 
@@ -34,8 +36,8 @@ pub fn main() !void {
     // std.debug.print("\n\nReduced De Bruijn: \n\n", .{});
     // try print_exp(reduced_debruijn);
 
-    var stack = Stack(StackType).init(allocator);
-    defer stack.deinit();
+    //var stack = Stack(StackType).init(allocator);
+    //defer stack.deinit();
 
     //const env = try Environment.init(allocator, null, null);
     //var state = State{ .code = converted_exp, .env = env, .stack = &stack };
@@ -47,26 +49,39 @@ pub fn main() !void {
     //try print_debruijn_exp(state.code);
     try stdout.print("\n", .{});
 
-    try free_exp(allocator, expstruct.resexp);
-    try free_exp(allocator, converted_exp);
+    try free_exp(allocator, expstruct.resexp, &freed_nodes);
+    try free_exp(allocator, converted_exp, &freed_nodes);
+    try free_exp(allocator, final_exp, &freed_nodes);
 }
 
-pub fn free_exp(allocator: std.mem.Allocator, expr: *expE) !void {
-    switch (expr.*) {
-        .VarE => |vare| {
-            if (vare.len > 0 and vare[0] >= '0' and vare[0] <= '9') {
-                allocator.free(vare);
-            }
-        },
-        .LambdaE => |lambder| {
-            try free_exp(allocator, lambder.body);
-        },
-        .ApplyE => |funcapp| {
-            try free_exp(allocator, funcapp.func);
-            try free_exp(allocator, funcapp.arg);
-        },
+pub fn free_exp(allocator: std.mem.Allocator, expr: *expE, freed_nodes: *std.AutoHashMap(*expE, void)) !void {
+    if (freed_nodes.contains(expr)) {
+        return;
+    } else {
+        try freed_nodes.put(expr, {});
+        switch (expr.*) {
+            .VarE => |vare| {
+                var is_debruijn = true;
+                for (vare) |c| {
+                    if (c < '0' or c > '9') {
+                        is_debruijn = false;
+                        break;
+                    }
+                }
+                if (is_debruijn and vare.len > 0) {
+                    allocator.free(vare);
+                }
+            },
+            .LambdaE => |lambder| {
+                try free_exp(allocator, lambder.body, freed_nodes);
+            },
+            .ApplyE => |funcapp| {
+                try free_exp(allocator, funcapp.func, freed_nodes);
+                try free_exp(allocator, funcapp.arg, freed_nodes);
+            },
+        }
+        allocator.destroy(expr);
     }
-    allocator.destroy(expr);
 }
 
 pub fn print_exp(headexp: *expE) !void {
@@ -109,13 +124,7 @@ pub fn print_debruijn_exp(headexp: *expE) !void {
 // Token Scanner
 const Token = struct { kind: tokenT, value: []const u8 };
 
-const expE = union(enum) {
-    VarE: []const u8,
-    LambdaE: struct { arg: []const u8, body: *expE },
-    ApplyE: struct { func: *expE, arg: *expE },
-};
-
-const sigma = union(enum) { sigma1: struct { index: usize, M: *expE, N: expE }, sigma2: struct { index: usize, M1: *expE, M2: *expE, N: *expE } };
+const expE = union(enum) { VarE: []const u8, LambdaE: struct { arg: []const u8, body: *expE }, ApplyE: struct { func: *expE, arg: *expE } }; //, UnboundVarE: []const u8, BoundVarE: usize };
 
 const tokenT = enum {
     LamT,
@@ -265,7 +274,7 @@ pub fn convert_debruijn(allocator: std.mem.Allocator, expr: *expE, dept_dict: *s
                 exp1.* = expE{ .VarE = new_value };
                 return exp1;
             } else {
-                return error.UnboundVariableSeen;
+                return expr;
             }
         },
         .LambdaE => |lambder| {
@@ -395,7 +404,7 @@ pub fn substitute(allocator: std.mem.Allocator, M: *expE, N: *expE, j: usize) !*
             }
         },
         .LambdaE => |lambder| {
-            const shifted_N = try shift_indices(allocator, 1, N, 0);
+            const shifted_N = try shift_indices(allocator, 1, N, 1);
             const newbod = try substitute(allocator, lambder.body, shifted_N, j + 1);
             const exp1 = try allocator.create(expE);
             exp1.* = expE{ .LambdaE = .{ .arg = lambder.arg, .body = newbod } };
