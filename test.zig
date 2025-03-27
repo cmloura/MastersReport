@@ -7,51 +7,63 @@ pub fn main() !void {
     var freed_nodes = std.AutoHashMap(*expE, void).init(allocator);
     defer freed_nodes.deinit();
 
-    var buf: [500]u8 = undefined;
+    var buf1: [500]u8 = undefined;
+    var buf2: [500]u8 = undefined;
 
     try stdout.print("Enter a lambda expression: ", .{});
 
-    const lambdaexp = (try stdin.readUntilDelimiterOrEof(&buf, '\n')).?;
-    try stdout.print("Expression: {s}\n", .{lambdaexp});
+    const lambdaexp1 = (try stdin.readUntilDelimiterOrEof(&buf1, '\n')).?;
 
-    const tlist = try scan(lambdaexp, allocator);
-    defer allocator.free(tlist);
+    try stdout.print("Enter another lambda expression: ", .{});
 
-    for (tlist) |token| {
-        try stdout.print("{s} ", .{print_token(token)});
-    }
-    try stdout.print("\n\n", .{});
+    const lambdaexp2 = (try stdin.readUntilDelimiterOrEof(&buf2, '\n')).?;
 
-    var dept_dict = std.StringHashMap(usize).init(allocator);
-    defer dept_dict.deinit();
+    const tlist1 = try scan(lambdaexp1, allocator);
+    defer allocator.free(tlist1);
 
-    const expstruct = try parse_exp(allocator, tlist);
+    const tlist2 = try scan(lambdaexp2, allocator);
+    defer allocator.free(tlist2);
+
+    var dept_dict1 = std.StringHashMap(usize).init(allocator);
+    defer dept_dict1.deinit();
+
+    var dept_dict2 = std.StringHashMap(usize).init(allocator);
+    defer dept_dict2.deinit();
+
+    const expstruct = try parse_exp(allocator, tlist1);
+    std.debug.print("\nAfter parsing: ", .{});
     try print_exp(allocator, expstruct.resexp);
+    const secondexpstruct = try parse_exp(allocator, tlist2);
 
-    const converted_exp = try convert_debruijn(allocator, expstruct.resexp, &dept_dict);
+    const converted_exp = try convert_debruijn(allocator, expstruct.resexp, &dept_dict1);
+    const second_converted_exp = try convert_debruijn(allocator, secondexpstruct.resexp, &dept_dict2);
     try stdout.print("\n\nConverted Expression: ", .{});
     try print_debruijn_exp(allocator, converted_exp);
+    try stdout.print("\n\nSecond Converted Expression: ", .{});
+    try print_debruijn_exp(allocator, second_converted_exp);
 
-    // const reduced_debruijn = try beta_reduce(allocator, 0, converted_exp);
-    // std.debug.print("\n\nReduced De Bruijn: \n\n", .{});
-    // try print_exp(reduced_debruijn);
-
-    //var stack = Stack(StackType).init(allocator);
-    //defer stack.deinit();
+    var stack = Stack(StackType).init(allocator);
+    defer stack.deinit();
 
     //const env = try Environment.init(allocator, null, null);
     //var state = State{ .code = converted_exp, .env = env, .stack = &stack };
 
-    //while (try evalStep(allocator, &state)) {}
-    try stdout.print("\n\nFinal Result: ", .{});
+    try stdout.print("\n\nCorrect Result for exp1: ", .{});
     const final_exp = try correct_beta_reduce(allocator, converted_exp);
     try print_debruijn_exp(allocator, final_exp);
+    const final_exp2 = try correct_beta_reduce(allocator, second_converted_exp);
+    try stdout.print("\n\nCorrect Result for exp1: ", .{});
+    try print_debruijn_exp(allocator, final_exp2);
     //try print_debruijn_exp(state.code);
     try stdout.print("\n", .{});
+    //while (try evalStep(allocator, &state)) {}
+    //try stdout.print("\n\nKrivine Machine + Beta Reduction result: ", .{});
+    //try print_debruijn_exp(allocator, state.code);
 
     try free_exp(allocator, expstruct.resexp, &freed_nodes);
     try free_exp(allocator, converted_exp, &freed_nodes);
     try free_exp(allocator, final_exp, &freed_nodes);
+    try free_exp(allocator, second_converted_exp, &freed_nodes);
 }
 
 pub fn free_exp(allocator: std.mem.Allocator, expr: *expE, freed_nodes: *std.AutoHashMap(*expE, void)) !void {
@@ -83,6 +95,7 @@ pub fn free_exp(allocator: std.mem.Allocator, expr: *expE, freed_nodes: *std.Aut
                 //allocator.free(uvare);
             },
             .BoundVarE => {},
+            .MetavarE => {},
         }
         allocator.destroy(expr);
     }
@@ -109,6 +122,9 @@ pub fn print_exp(allocator: std.mem.Allocator, headexp: *expE) !void {
         .UnboundVarE => |uvare| {
             try printer.print("{s} ", .{uvare});
         },
+        .MetavarE => |metavar| {
+            try printer.print("{s}", .{metavar});
+        },
     }
 }
 
@@ -116,7 +132,6 @@ pub fn print_debruijn_exp(allocator: std.mem.Allocator, headexp: *expE) !void {
     const printer = std.io.getStdOut().writer();
     switch (headexp.*) {
         .VarE => |vare| {
-            //std.debug.print("BAD STANDARD Variable: ", .{});
             try printer.print("{s}", .{vare});
         },
         .LambdaE => |lambder| {
@@ -139,31 +154,40 @@ pub fn print_debruijn_exp(allocator: std.mem.Allocator, headexp: *expE) !void {
             //std.debug.print("Unbound Variable: ", .{});
             try printer.print("{s}", .{uvare});
         },
+        .MetavarE => |metavar| {
+            try printer.print("{s}", .{metavar});
+        },
     }
 }
 
 // Token Scanner
 const Token = struct { kind: tokenT, value: []const u8 };
 
-const expE = union(enum) { VarE: []const u8, LambdaE: struct { arg: []const u8, body: *expE }, ApplyE: struct { func: *expE, arg: *expE }, UnboundVarE: []const u8, BoundVarE: usize };
+const expE = union(enum) { VarE: []const u8, LambdaE: struct { arg: []const u8, body: *expE }, ApplyE: struct { func: *expE, arg: *expE }, UnboundVarE: []const u8, BoundVarE: usize, MetavarE: []const u8 };
 
-const tokenT = enum {
-    LamT,
-    LParenT,
-    RparenT,
-    PeriodT,
-    IdT,
-};
+const tokenT = enum { LamT, LParenT, RparenT, PeriodT, IdT, MetavariableT };
 
 const errors = error{ InputEndsButExpectedAnExpression, InputEndsButExpectedToken, TokenSeenButExpected, UnboundVariableSeen };
 
-pub fn is_letter(c: u8) bool {
+pub fn is_lowercase_letter(c: u8) bool {
     return c >= 'a' and c <= 'z';
+}
+
+pub fn is_uppercase_letter(c: u8) bool {
+    return c >= 'A' and c <= 'Z';
 }
 
 pub fn scanName(str: []const u8) []const u8 {
     var i: usize = 0;
-    while (i < str.len and is_letter(str[i])) {
+    while (i < str.len and is_lowercase_letter(str[i])) {
+        i += 1;
+    }
+    return str[0..i];
+}
+
+pub fn scanMetavariable(str: []const u8) []const u8 {
+    var i: usize = 0;
+    while (i < str.len and is_uppercase_letter(str[i])) {
         i += 1;
     }
     return str[0..i];
@@ -178,7 +202,7 @@ pub fn scan(str: []u8, allocator: std.mem.Allocator) ![]Token {
     while (whilestr.len > 0) {
         const c = whilestr[0];
 
-        if (is_letter(c)) {
+        if (is_lowercase_letter(c)) {
             const scannedstr = scanName(whilestr);
             if (std.mem.eql(u8, scannedstr, "lam")) {
                 try tokenList.append(Token{ .kind = tokenT.LamT, .value = "lam" });
@@ -190,6 +214,10 @@ pub fn scan(str: []u8, allocator: std.mem.Allocator) ![]Token {
             while (whilestr.len > 0 and whilestr[0] == ' ') {
                 whilestr = whilestr[1..];
             }
+        } else if (is_uppercase_letter(c)) {
+            const scannedMetavar = scanMetavariable(whilestr);
+            try tokenList.append(Token{ .kind = tokenT.MetavariableT, .value = scannedMetavar });
+            whilestr = whilestr[scannedMetavar.len..];
         } else {
             switch (c) {
                 '(' => try tokenList.append(Token{ .kind = tokenT.LParenT, .value = "(" }),
@@ -203,7 +231,6 @@ pub fn scan(str: []u8, allocator: std.mem.Allocator) ![]Token {
             whilestr = whilestr[1..];
         }
     }
-
     return try tokenList.toOwnedSlice();
 }
 
@@ -280,6 +307,13 @@ pub fn parse_singular(allocator: std.mem.Allocator, tailptr: *[]const Token) Par
             tailptr.* = tail;
             return exp1;
         },
+        .MetavariableT => {
+            const arg = token.value;
+            const exp1 = try allocator.create(expE);
+            exp1.* = expE{ .MetavarE = arg };
+            tailptr.* = tail;
+            return exp1;
+        },
         else => {
             return ParseError.TokenSeenButExpected;
         },
@@ -329,6 +363,9 @@ pub fn convert_debruijn(allocator: std.mem.Allocator, expr: *expE, dept_dict: *s
             exp1.* = expE{ .ApplyE = .{ .arg = right, .func = left } };
             return exp1;
         },
+        .MetavarE => {
+            return expr;
+        },
         else => {
             return ParseError.UnboundVariableSeen; // Any other expression types are created during the De Bruijn Process
         },
@@ -350,6 +387,9 @@ pub fn shift_indices(allocator: std.mem.Allocator, d: usize, expr: *expE, cutoff
             return expr;
         },
         .UnboundVarE => {
+            return try copy_expr(allocator, expr);
+        },
+        .MetavarE => {
             return try copy_expr(allocator, expr);
         },
         .BoundVarE => |bvare| {
@@ -400,6 +440,10 @@ pub fn copy_expr(allocator: std.mem.Allocator, expr: *expE) !*expE {
             const new_arg = try copy_expr(allocator, app.arg);
             exp1.* = expE{ .ApplyE = .{ .func = new_func, .arg = new_arg } };
         },
+        .MetavarE => |metavar| {
+            const new_index = try allocator.dupe(u8, metavar);
+            exp1.* = expE{ .MetavarE = new_index };
+        },
     }
     return exp1;
 }
@@ -420,6 +464,9 @@ pub fn substitute(allocator: std.mem.Allocator, M: *expE, N: *expE, j: usize) !*
             }
         },
         .UnboundVarE => {
+            return try copy_expr(allocator, M);
+        },
+        .MetavarE => {
             return try copy_expr(allocator, M);
         },
         .BoundVarE => |bvare| {
@@ -479,32 +526,6 @@ pub fn correct_beta_reduce(allocator: std.mem.Allocator, expr: *expE) !*expE {
         else => return expr,
     }
 }
-
-// pub fn reduce(allocator: std.mem.Allocator, M: *expE, N: *expE, index: usize) !*expE {
-//     switch (M.*) {
-//         .VarE => |vare| {
-//             const var_index = try std.fmt.parseInt(usize, vare, 10);
-//             if (var_index == index) {
-//                 return N;
-//             } else {
-//                 return M;
-//             }
-//         },
-//         .LambdaE => |lambder| {
-//             const newbod = try reduce(allocator, lambder.body, N, index + 1);
-//             const exp1 = try allocator.create(expE);
-//             exp1.* = expE{ .LambdaE = .{ .arg = lambder.arg, .body = newbod } };
-//             return exp1;
-//         },
-//         .ApplyE => |app| {
-//             const newfunc = try reduce(allocator, app.func, N, index);
-//             const newarg = try reduce(allocator, app.arg, N, index);
-//             const exp1 = try allocator.create(expE);
-//             exp1.* = expE{ .ApplyE = .{ .func = newfunc, .arg = newarg } };
-//             return exp1;
-//         },
-//     }
-// }
 
 // Krivine Machine
 const Closure = struct {
@@ -616,6 +637,15 @@ pub fn Stack(comptime T: type) type {
 //             try state.stack.push(.{ .c = app.arg, .oldenv = state.env });
 //             state.code = app.func;
 //         },
+//         .BoundVarE => {
+//             if (state.env.lookup(0)) |closure| {
+//                 state.code = closure.exp;
+//                 state.env = closure.env;
+//             } else {
+//                 return errors.UnboundVariableSeen;
+//             }
+//         },
+//         .UnboundVarE => {},
 //     }
 //     return true;
 // }
