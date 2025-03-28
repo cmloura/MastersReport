@@ -4,8 +4,10 @@ pub fn main() !void {
     const stdin = std.io.getStdIn().reader();
     const stdout = std.io.getStdOut().writer();
     const allocator = std.heap.page_allocator;
+    var freed_nodes = std.AutoHashMap(*expE, void).init(allocator);
+    defer freed_nodes.deinit();
 
-    var buf: [250]u8 = undefined;
+    var buf: [500]u8 = undefined;
 
     try stdout.print("Enter a lambda expression: ", .{});
 
@@ -24,51 +26,69 @@ pub fn main() !void {
     defer dept_dict.deinit();
 
     const expstruct = try parse_exp(allocator, tlist);
-    try print_exp(expstruct.resexp);
+    try print_exp(allocator, expstruct.resexp);
 
     const converted_exp = try convert_debruijn(allocator, expstruct.resexp, &dept_dict);
     try stdout.print("\n\nConverted Expression: ", .{});
-    try print_debruijn_exp(converted_exp);
-    try stdout.print("\n\n", .{});
+    try print_debruijn_exp(allocator, converted_exp);
 
     // const reduced_debruijn = try beta_reduce(allocator, 0, converted_exp);
     // std.debug.print("\n\nReduced De Bruijn: \n\n", .{});
     // try print_exp(reduced_debruijn);
 
-    var stack = Stack(StackType).init(allocator);
-    defer stack.deinit();
+    //var stack = Stack(StackType).init(allocator);
+    //defer stack.deinit();
 
-    const env = try Environment.init(allocator, null, null);
-    var state = State{ .code = converted_exp, .env = env, .stack = &stack };
+    //const env = try Environment.init(allocator, null, null);
+    //var state = State{ .code = converted_exp, .env = env, .stack = &stack };
 
-    while (try evalStep(allocator, &state)) {}
+    //while (try evalStep(allocator, &state)) {}
     try stdout.print("\n\nFinal Result: ", .{});
-    try print_debruijn_exp(state.code);
+    const final_exp = try correct_beta_reduce(allocator, converted_exp);
+    try print_debruijn_exp(allocator, final_exp);
+    //try print_debruijn_exp(state.code);
     try stdout.print("\n", .{});
 
-    try free_exp(allocator, expstruct.resexp);
-    try free_exp(allocator, converted_exp);
+    try free_exp(allocator, expstruct.resexp, &freed_nodes);
+    try free_exp(allocator, converted_exp, &freed_nodes);
+    try free_exp(allocator, final_exp, &freed_nodes);
 }
 
-pub fn free_exp(allocator: std.mem.Allocator, expr: *expE) !void {
-    switch (expr.*) {
-        .VarE => |vare| {
-            if (vare.len > 0 and vare[0] >= '0' and vare[0] <= '9') {
-                allocator.free(vare);
-            }
-        },
-        .LambdaE => |lambder| {
-            try free_exp(allocator, lambder.body);
-        },
-        .ApplyE => |funcapp| {
-            try free_exp(allocator, funcapp.func);
-            try free_exp(allocator, funcapp.arg);
-        },
+pub fn free_exp(allocator: std.mem.Allocator, expr: *expE, freed_nodes: *std.AutoHashMap(*expE, void)) !void {
+    if (freed_nodes.contains(expr)) {
+        return;
+    } else {
+        try freed_nodes.put(expr, {});
+        switch (expr.*) {
+            .VarE => |vare| {
+                var is_debruijn = true;
+                for (vare) |c| {
+                    if (c < '0' or c > '9') {
+                        is_debruijn = false;
+                        break;
+                    }
+                }
+                if (is_debruijn and vare.len > 0) {
+                    allocator.free(vare);
+                }
+            },
+            .LambdaE => |lambder| {
+                try free_exp(allocator, lambder.body, freed_nodes);
+            },
+            .ApplyE => |funcapp| {
+                try free_exp(allocator, funcapp.func, freed_nodes);
+                try free_exp(allocator, funcapp.arg, freed_nodes);
+            },
+            .UnboundVarE => {
+                //allocator.free(uvare);
+            },
+            .BoundVarE => {},
+        }
+        allocator.destroy(expr);
     }
-    allocator.destroy(expr);
 }
 
-pub fn print_exp(headexp: *expE) !void {
+pub fn print_exp(allocator: std.mem.Allocator, headexp: *expE) !void {
     const printer = std.io.getStdOut().writer();
     switch (headexp.*) {
         .VarE => |vare| {
@@ -76,31 +96,48 @@ pub fn print_exp(headexp: *expE) !void {
         },
         .LambdaE => |lambder| {
             try printer.print("lam{s} . ", .{lambder.arg});
-            try print_exp(lambder.body);
+            try print_exp(allocator, lambder.body);
         },
         .ApplyE => |funcapp| {
-            try print_exp(funcapp.func);
-            try print_exp(funcapp.arg);
+            try print_exp(allocator, funcapp.func);
+            try print_exp(allocator, funcapp.arg);
+        },
+        .BoundVarE => |bvare| {
+            const bvarestr = try std.fmt.allocPrint(allocator, "{d}", .{bvare});
+            try printer.print("{s} ", .{bvarestr});
+        },
+        .UnboundVarE => |uvare| {
+            try printer.print("{s} ", .{uvare});
         },
     }
 }
 
-pub fn print_debruijn_exp(headexp: *expE) !void {
+pub fn print_debruijn_exp(allocator: std.mem.Allocator, headexp: *expE) !void {
     const printer = std.io.getStdOut().writer();
     switch (headexp.*) {
         .VarE => |vare| {
+            //std.debug.print("BAD STANDARD Variable: ", .{});
             try printer.print("{s}", .{vare});
         },
         .LambdaE => |lambder| {
             try printer.print("lam. ", .{});
-            try print_debruijn_exp(lambder.body);
+            try print_debruijn_exp(allocator, lambder.body);
         },
         .ApplyE => |funcapp| {
             try printer.print("(", .{});
-            try print_debruijn_exp(funcapp.func);
+            try print_debruijn_exp(allocator, funcapp.func);
             try printer.print(")(", .{});
-            try print_debruijn_exp(funcapp.arg);
+            try print_debruijn_exp(allocator, funcapp.arg);
             try printer.print(")", .{});
+        },
+        .BoundVarE => |bvare| {
+            //std.debug.print("Bound Variable: ", .{});
+            const bvarestr = try std.fmt.allocPrint(allocator, "{d}", .{bvare});
+            try printer.print("{s}", .{bvarestr});
+        },
+        .UnboundVarE => |uvare| {
+            //std.debug.print("Unbound Variable: ", .{});
+            try printer.print("{s}", .{uvare});
         },
     }
 }
@@ -108,13 +145,7 @@ pub fn print_debruijn_exp(headexp: *expE) !void {
 // Token Scanner
 const Token = struct { kind: tokenT, value: []const u8 };
 
-const expE = union(enum) {
-    VarE: []const u8,
-    LambdaE: struct { arg: []const u8, body: *expE },
-    ApplyE: struct { func: *expE, arg: *expE },
-};
-
-const sigma = union(enum) { sigma1: struct { index: usize, M: *expE, N: expE }, sigma2: struct { index: usize, M1: *expE, M2: *expE, N: *expE } };
+const expE = union(enum) { VarE: []const u8, LambdaE: struct { arg: []const u8, body: *expE }, ApplyE: struct { func: *expE, arg: *expE }, UnboundVarE: []const u8, BoundVarE: usize };
 
 const tokenT = enum {
     LamT,
@@ -258,13 +289,13 @@ pub fn parse_singular(allocator: std.mem.Allocator, tailptr: *[]const Token) Par
 pub fn convert_debruijn(allocator: std.mem.Allocator, expr: *expE, dept_dict: *std.StringHashMap(usize)) !*expE {
     switch (expr.*) {
         .VarE => |item| {
+            const exp1 = try allocator.create(expE);
             if (dept_dict.get(item)) |temp_new_value| {
-                const new_value = try std.fmt.allocPrint(allocator, "{d}", .{temp_new_value});
-                const exp1 = try allocator.create(expE);
-                exp1.* = expE{ .VarE = new_value };
+                exp1.* = expE{ .BoundVarE = temp_new_value };
                 return exp1;
             } else {
-                return error.UnboundVariableSeen;
+                exp1.* = expE{ .UnboundVarE = item };
+                return exp1;
             }
         },
         .LambdaE => |lambder| {
@@ -298,62 +329,182 @@ pub fn convert_debruijn(allocator: std.mem.Allocator, expr: *expE, dept_dict: *s
             exp1.* = expE{ .ApplyE = .{ .arg = right, .func = left } };
             return exp1;
         },
+        else => {
+            return ParseError.UnboundVariableSeen; // Any other expression types are created during the De Bruijn Process
+        },
     }
 }
 
-// Reduction
-const location = u8;
-const identifier = []u8;
-
-pub fn beta_reduce(allocator: std.mem.Allocator, depth: usize, expr: *expE) !*expE {
+pub fn shift_indices(allocator: std.mem.Allocator, d: usize, expr: *expE, cutoff: usize) !*expE {
     switch (expr.*) {
-        .VarE => return expr,
-        .LambdaE => |lambder| {
-            const newbod = try beta_reduce(allocator, depth + 1, lambder.body);
-            const exp1 = try allocator.create(expE);
-            exp1.* = expE{ .LambdaE = .{ .arg = lambder.arg, .body = newbod } };
-            return exp1;
-        },
-        .ApplyE => |app| {
-            const newfunc = try beta_reduce(allocator, depth, app.func);
-            const newarg = try beta_reduce(allocator, depth, app.arg);
-
-            if (newfunc.* == .LambdaE) {
-                return try reduce(allocator, newfunc.LambdaE.body, newarg, 1);
-            } else {
+        .VarE => |index_str| {
+            const index = std.fmt.parseInt(usize, index_str, 10) catch {
+                return try copy_expr(allocator, expr);
+            };
+            if (index >= cutoff) {
+                const new_index = try std.fmt.allocPrint(allocator, "{d}", .{index + d});
                 const exp1 = try allocator.create(expE);
-                exp1.* = expE{ .ApplyE = .{ .func = newfunc, .arg = newarg } };
+                exp1.* = expE{ .VarE = new_index };
                 return exp1;
             }
+            return expr;
         },
-    }
-}
-
-pub fn reduce(allocator: std.mem.Allocator, M: *expE, N: *expE, index: usize) !*expE {
-    switch (M.*) {
-        .VarE => |vare| {
-            const var_index = try std.fmt.parseInt(usize, vare, 10);
-            if (var_index == index) {
-                return N;
-            } else {
-                return M;
+        .UnboundVarE => {
+            return try copy_expr(allocator, expr);
+        },
+        .BoundVarE => |bvare| {
+            if (bvare >= cutoff) {
+                const exp1 = try allocator.create(expE);
+                exp1.* = expE{ .BoundVarE = bvare + d };
+                return exp1;
             }
+            return expr;
         },
         .LambdaE => |lambder| {
-            const newbod = try reduce(allocator, lambder.body, N, index + 1);
+            const newbod = try shift_indices(allocator, d, lambder.body, cutoff + 1);
             const exp1 = try allocator.create(expE);
             exp1.* = expE{ .LambdaE = .{ .arg = lambder.arg, .body = newbod } };
             return exp1;
         },
         .ApplyE => |app| {
-            const newfunc = try reduce(allocator, app.func, N, index);
-            const newarg = try reduce(allocator, app.arg, N, index);
+            const newfunc = try shift_indices(allocator, d, app.func, cutoff);
+            const newarg = try shift_indices(allocator, d, app.arg, cutoff);
             const exp1 = try allocator.create(expE);
             exp1.* = expE{ .ApplyE = .{ .func = newfunc, .arg = newarg } };
             return exp1;
         },
     }
 }
+
+pub fn copy_expr(allocator: std.mem.Allocator, expr: *expE) !*expE {
+    const exp1 = try allocator.create(expE);
+    switch (expr.*) {
+        .VarE => |index_str| {
+            const new_index = try allocator.dupe(u8, index_str);
+            exp1.* = expE{ .VarE = new_index };
+        },
+        .BoundVarE => |bvare| {
+            exp1.* = expE{ .BoundVarE = bvare };
+        },
+        .UnboundVarE => |uvare| {
+            const new_index = try allocator.dupe(u8, uvare);
+            exp1.* = expE{ .UnboundVarE = new_index };
+        },
+        .LambdaE => |lambder| {
+            const new_body = try copy_expr(allocator, lambder.body);
+            const new_arg = try allocator.dupe(u8, lambder.arg);
+            exp1.* = expE{ .LambdaE = .{ .arg = new_arg, .body = new_body } };
+        },
+        .ApplyE => |app| {
+            const new_func = try copy_expr(allocator, app.func);
+            const new_arg = try copy_expr(allocator, app.arg);
+            exp1.* = expE{ .ApplyE = .{ .func = new_func, .arg = new_arg } };
+        },
+    }
+    return exp1;
+}
+
+pub fn substitute(allocator: std.mem.Allocator, M: *expE, N: *expE, j: usize) !*expE {
+    switch (M.*) {
+        .VarE => |index_str| {
+            const index = try std.fmt.parseInt(usize, index_str, 10);
+            if (index == j + 1) {
+                return try copy_expr(allocator, N);
+            } else if (index > j + 1) {
+                const new_index = try std.fmt.allocPrint(allocator, "{d}", .{index - 1});
+                const exp1 = try allocator.create(expE);
+                exp1.* = expE{ .VarE = new_index };
+                return exp1;
+            } else {
+                return try copy_expr(allocator, M);
+            }
+        },
+        .UnboundVarE => {
+            return try copy_expr(allocator, M);
+        },
+        .BoundVarE => |bvare| {
+            if (bvare == j + 1) {
+                return try copy_expr(allocator, N);
+            } else if (bvare > j + 1) {
+                const exp1 = try allocator.create(expE);
+                exp1.* = expE{ .BoundVarE = bvare - 1 };
+                return exp1;
+            } else {
+                return try copy_expr(allocator, M);
+            }
+        },
+        .LambdaE => |lambder| {
+            const shifted_N = try shift_indices(allocator, 1, N, 1);
+            const newbod = try substitute(allocator, lambder.body, shifted_N, j + 1);
+            const exp1 = try allocator.create(expE);
+            exp1.* = expE{ .LambdaE = .{ .arg = lambder.arg, .body = newbod } };
+            return exp1;
+        },
+        .ApplyE => |app| {
+            const new_func = try substitute(allocator, app.func, N, j);
+            const new_arg = try substitute(allocator, app.arg, N, j);
+            const exp1 = try allocator.create(expE);
+            exp1.* = expE{ .ApplyE = .{ .func = new_func, .arg = new_arg } };
+            return exp1;
+        },
+    }
+}
+
+pub fn correct_beta_reduce(allocator: std.mem.Allocator, expr: *expE) !*expE {
+    switch (expr.*) {
+        .ApplyE => |app| {
+            const reduced_func = try correct_beta_reduce(allocator, app.func);
+            const reduced_arg = try correct_beta_reduce(allocator, app.arg);
+
+            if (reduced_func.* == .LambdaE) {
+                const lambda = reduced_func.*.LambdaE;
+                if (reduced_arg.* == .VarE or reduced_arg.* == .BoundVarE) {
+                    return try substitute(allocator, lambda.body, reduced_arg, 0);
+                } else {
+                    const new_left = try substitute(allocator, lambda.body, reduced_arg, 0);
+                    return try correct_beta_reduce(allocator, new_left);
+                }
+            } else {
+                const exp1 = try allocator.create(expE);
+                exp1.* = expE{ .ApplyE = .{ .func = reduced_func, .arg = reduced_arg } };
+                return exp1;
+            }
+        },
+        .LambdaE => |lambder| {
+            const reduced_body = try correct_beta_reduce(allocator, lambder.body);
+            const exp1 = try allocator.create(expE);
+            exp1.* = expE{ .LambdaE = .{ .arg = lambder.arg, .body = reduced_body } };
+            return exp1;
+        },
+        else => return expr,
+    }
+}
+
+// pub fn reduce(allocator: std.mem.Allocator, M: *expE, N: *expE, index: usize) !*expE {
+//     switch (M.*) {
+//         .VarE => |vare| {
+//             const var_index = try std.fmt.parseInt(usize, vare, 10);
+//             if (var_index == index) {
+//                 return N;
+//             } else {
+//                 return M;
+//             }
+//         },
+//         .LambdaE => |lambder| {
+//             const newbod = try reduce(allocator, lambder.body, N, index + 1);
+//             const exp1 = try allocator.create(expE);
+//             exp1.* = expE{ .LambdaE = .{ .arg = lambder.arg, .body = newbod } };
+//             return exp1;
+//         },
+//         .ApplyE => |app| {
+//             const newfunc = try reduce(allocator, app.func, N, index);
+//             const newarg = try reduce(allocator, app.arg, N, index);
+//             const exp1 = try allocator.create(expE);
+//             exp1.* = expE{ .ApplyE = .{ .func = newfunc, .arg = newarg } };
+//             return exp1;
+//         },
+//     }
+// }
 
 // Krivine Machine
 const Closure = struct {
@@ -432,39 +583,39 @@ pub fn Stack(comptime T: type) type {
     };
 }
 
-pub fn evalStep(allocator: std.mem.Allocator, state: *State) !bool {
-    switch (state.code.*) {
-        .VarE => {
-            std.debug.print("In the VarE portion of Krivine Machine\n", .{});
-            if (state.env.lookup(0)) |closure| {
-                state.code = closure.exp;
-                state.env = closure.env;
-            } else {
-                return errors.UnboundVariableSeen;
-            }
-        },
-        .LambdaE => |lambder| {
-            if (state.stack.pop()) |top| {
-                std.debug.print("Popping {any} from the stack!\n", .{top});
-                const closure = try allocator.create(Closure);
-                closure.* = .{ .exp = top.c, .env = top.oldenv };
-                const env1 = try Environment.init(allocator, closure, state.env);
-                state.code = lambder.body;
-                state.env = env1;
-            } else {
-                const reduced_expr = try beta_reduce(allocator, 0, lambder.body);
-                const new_lambda_exp = try allocator.create(expE);
-                new_lambda_exp.* = .{ .LambdaE = .{ .arg = "", .body = reduced_expr } };
-                state.code = new_lambda_exp;
-                std.debug.print("Nothing on the stack. Returning False\n", .{});
-                return false;
-            }
-        },
-        .ApplyE => |app| {
-            std.debug.print("In the ApplyE portion of Krivine Machine\n", .{});
-            try state.stack.push(.{ .c = app.arg, .oldenv = state.env });
-            state.code = app.func;
-        },
-    }
-    return true;
-}
+// pub fn evalStep(allocator: std.mem.Allocator, state: *State) !bool {
+//     switch (state.code.*) {
+//         .VarE => {
+//             std.debug.print("In the VarE portion of Krivine Machine\n", .{});
+//             if (state.env.lookup(0)) |closure| {
+//                 state.code = closure.exp;
+//                 state.env = closure.env;
+//             } else {
+//                 return errors.UnboundVariableSeen;
+//             }
+//         },
+//         .LambdaE => |lambder| {
+//             if (state.stack.pop()) |top| {
+//                 std.debug.print("Popping {any} from the stack!\n", .{top});
+//                 const closure = try allocator.create(Closure);
+//                 closure.* = .{ .exp = top.c, .env = top.oldenv };
+//                 const env1 = try Environment.init(allocator, closure, state.env);
+//                 state.code = lambder.body;
+//                 state.env = env1;
+//             } else {
+//                 const reduced_expr = try correct_beta_reduce(allocator, lambder.body);
+//                 const new_lambda_exp = try allocator.create(expE);
+//                 new_lambda_exp.* = .{ .LambdaE = .{ .arg = "", .body = reduced_expr } };
+//                 state.code = new_lambda_exp;
+//                 std.debug.print("Nothing on the stack. Returning False\n", .{});
+//                 return false;
+//             }
+//         },
+//         .ApplyE => |app| {
+//             std.debug.print("In the ApplyE portion of Krivine Machine\n", .{});
+//             try state.stack.push(.{ .c = app.arg, .oldenv = state.env });
+//             state.code = app.func;
+//         },
+//     }
+//     return true;
+// }
