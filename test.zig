@@ -604,6 +604,128 @@ pub fn Stack(comptime T: type) type {
     };
 }
 
+// Higher order unification
+
+const DisagreementPair = struct { left: *expE, right: *expE };
+
+const Substitution = std.StringHashMap(*expE);
+
+const Node = struct {
+    type: NodeType,
+    disagreement_pairs: []const DisagreementPair,
+    substitution: ?Substitution = null,
+};
+
+const NodeType = enum {
+    Failure,
+    Success,
+    Intermediate,
+};
+
+pub fn is_rigid(expr: *expE) bool {
+    return switch (expr.*) {
+        .BoundVarE => true,
+        .VarE => false,
+        .MetavarE => false,
+        .UnboundVarE => false,
+        .LambdaE => |lambder| is_rigid(lambder.body),
+        .ApplyE => |app| is_rigid(app.func) and is_rigid(app.arg),
+    };
+}
+
+pub fn same_head(left: *expE, right: *expE) bool {
+    return switch (left.*) {
+        .BoundVarE => |l_var| switch (right.*) {
+            .BoundVarE => |r_var| l_var == r_var,
+            else => false,
+        },
+        .VarE => |l_var| switch (right.*) {
+            .VarE => |r_var| std.mem.eql(u8, l_var, r_var),
+            else => false,
+        },
+        .ApplyE => |l_app| switch (right.*) {
+            .ApplyE => |r_app| same_head(l_app.func, r_app.func),
+            else => false,
+        },
+        .LambdaE => |l_lambder| switch (right.*) {
+            .LambdaE => |r_lambder| same_head(l_lambder.body, r_lambder.body),
+            else => false,
+        },
+        else => false,
+    };
+}
+
+pub fn simplify(allocator: std.mem.Allocator, pairs: []const DisagreementPair) !Node {
+    var simplified_pairs = std.ArrayList(DisagreementPair).init(allocator);
+    defer simplified_pairs.deinit();
+
+    for (pairs) |pair| {
+        if (is_rigid(pair.left) and is_rigid(pair.right)) {
+            if (!same_head(pair.left, pair.right)) {
+                return Node{ .type = .Failure, .disagreement_pairs = &[_]DisagreementPair{} };
+            }
+
+            try breakdown(pair, &simplified_pairs);
+            continue;
+        }
+
+        try simplified_pairs.append(pair);
+    }
+
+    if (check_flexibility(simplified_pairs.items)) {}
+}
+
+pub fn check_flexibility(pairs: []const DisagreementPair) bool {
+    for (pairs) |pair| {
+        if (is_rigid(pair.left) or is_rigid(pair.right)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+pub fn breakdown(pair: DisagreementPair, res: *std.ArrayList(DisagreementPair)) !void {
+    switch (pair.left.*) {
+        .ApplyE => |l_app| switch (pair.right.*) {
+            .ApplyE => |r_app| {
+                try res.append(.{ .left = l_app.func, .right = r_app.func });
+                try res.append(.{ .left = l_app.arg, .right = r_app.arg });
+            },
+            else => {},
+        },
+        .LambdaE => |l_lambder| switch (pair.right.*) {
+            .LambdaE => |r_lambder| {
+                try res.append(.{ .left = l_lambder.body, .right = r_lambder.body });
+            },
+            else => {},
+        },
+        else => {},
+    }
+}
+
+pub fn create_success_node(allocator: std.mem.Allocator, pairs: []const DisagreementPair) !Node {
+    var subst = Substitution.init(allocator);
+
+    for (pairs) |pair| {
+        switch (pair.left.*) {
+            .MetavarE => |metavar| {
+                try subst.put(metavar, pair.right);
+            },
+            .UnboundVarE => |uvare| {
+                try subst.put(uvare, pair.right);
+            },
+            else => {},
+        }
+    }
+
+    return Node{ .type = .Success, .disagreement_pairs = pairs, .substitution = subst };
+}
+
+pub fn generate_fresh_vars() void {}
+
+pub fn match() void {}
+
+pub fn create_matching_tree() void {}
 // pub fn evalStep(allocator: std.mem.Allocator, state: *State) !bool {
 //     switch (state.code.*) {
 //         .VarE => {
