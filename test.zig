@@ -978,6 +978,8 @@ pub fn match(allocator: std.mem.Allocator, flexible_term: *expE, rigid_term: *ex
     return subst;
 }
 
+// test
+
 // pub fn evalStep(allocator: std.mem.Allocator, state: *State) !bool {
 //     switch (state.code.*) {
 //         .VarE => {
