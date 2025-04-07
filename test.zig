@@ -1218,35 +1218,39 @@ pub const UnifyM = struct {
             while (arg_index < nargs) : (arg_index += 1) {
                 const arg = try self.allocator.create(expE);
                 arg.* = expE{ .BoundVarE = arg_index };
-                const ap = try self.allocator.create(expE);
-                ap.* = expE{ .ApplyE = .{ .func = inner_term, .arg = arg } };
+                const app = try self.allocator.create(expE);
+                app.* = expE{ .ApplyE = .{ .func = inner_term, .arg = arg } };
+                inner_term = app;
             }
-        }
+            var i: usize = 0;
+            while (i < context_len) : (i += 1) {
+                const arg = try self.allocator.create(expE);
+                arg.* = expE{ .BoundVarE = i };
+                const app = try self.allocator.create(expE);
+                app.* = expE{ .ApplyE = .{ .func = inner_term, .arg = arg } };
+                inner_term = app;
+            }
 
-        var i: usize = 0;
-        while (i < context_len) : (i += 1) {
-            var subst = SubstMap.init(self.allocator);
-            const term = try self.allocator.create(expE);
-            term.* = expE{ .BoundVarE = i };
+            var lambder_bod = inner_term;
             var j: usize = 0;
-
-            while (j < context_len) : (j += 1) {
-                term.* = expE{ .LambdaE = .{ .arg = "", .body = try self.allocator.create(expE) } };
-                term.LambdaE.body.* = term.*;
+            while (j < nargs) : (j += 1) {
+                const temp = try self.allocator.create(expE);
+                temp.* = expE{ .LambdaE = .{ .arg = "", .body = lambder_bod } };
+                lambder_bod = temp;
             }
-            try subst.put(mv, term);
+            try subst.put(mv, lambder_bod);
             try results.append(subst);
         }
 
         if (is_closed(stuck_term)) {
             var subst = SubstMap.init(self.allocator);
 
-            const term = stuck_term;
+            var term = stuck_term;
             var j: usize = 0;
             while (j < context_len) : (j += 1) {
-                var term_ptr = try self.allocator.create(expE);
-                term_ptr = term;
-                term.* = expE{ .LambdaE = .{ .arg = "", .body = term_ptr } };
+                const temp = try self.allocator.create(expE);
+                temp.* = expE{ .LambdaE = .{ .arg = "", .body = term } };
+                term = temp;
             }
             try subst.put(mv, term);
             try results.append(subst);
