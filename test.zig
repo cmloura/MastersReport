@@ -219,7 +219,7 @@ const expE = union(enum) { VarE: []const u8, LambdaE: struct { arg: []const u8, 
 
 const tokenT = enum { LamT, LParenT, RparenT, PeriodT, IdT, MetavariableT };
 
-const errors = error{ InputEndsButExpectedAnExpression, InputEndsButExpectedToken, TokenSeenButExpected, UnboundVariableSeen, InvalidFlexibleTerm };
+const errors = error{ InputEndsButExpectedAnExpression, InputEndsButExpectedToken, TokenSeenButExpected, UnboundVariableSeen, InvalidFlexibleTerm, SubstitutionConflict };
 
 pub fn is_lowercase_letter(c: u8) bool {
     return c >= 'a' and c <= 'z';
@@ -306,7 +306,7 @@ pub fn expect_token(expectedT: tokenT, tokens: []const Token) ![]const Token {
 }
 
 const ParseResult = struct { resexp: *expE, tokenl: []const Token };
-const ParseError = error{ InputEndsButExpectedAnExpression, TokenSeenButExpected, AllocatorError, OutOfMemory, InputEndsButExpectedToken, UnboundVariableSeen, InvalidFlexibleTerm };
+const ParseError = error{ InputEndsButExpectedAnExpression, TokenSeenButExpected, AllocatorError, OutOfMemory, InputEndsButExpectedToken, UnboundVariableSeen, InvalidFlexibleTerm, SubstitutionConflict };
 
 // Parser
 pub fn parse_exp(allocator: std.mem.Allocator, tokens: []const Token) ParseError!ParseResult {
@@ -909,7 +909,6 @@ pub fn reduce(allocator: std.mem.Allocator, expr: *expE) !*expE {
                 const lam_body = reduced_left.*.LambdaE.body;
                 const reduced_right = try reduce(allocator, app.arg);
                 const right_pointer = try copy_expr(allocator, reduced_right);
-
                 const subst = try substitute_boundvar(allocator, right_pointer, 1, lam_body);
                 FRESH_INDEX += 1;
                 return try reduce(allocator, subst);
@@ -1029,7 +1028,6 @@ pub const UnifyM = struct {
                 return result;
             }
         }
-
         const reduced_t1 = try reduce(self.allocator, t1);
         if (!exp_equal(reduced_t1, t1)) {
             std.debug.print("TRUE!\n\n", .{});
@@ -1135,8 +1133,7 @@ pub const UnifyM = struct {
             const id = entry.key_ptr.*;
             const replacement = entry.value_ptr.*;
 
-            const replacement_pointer = try self.allocator.create(expE);
-            replacement_pointer.* = replacement.*;
+            const replacement_pointer = try copy_expr(self.allocator, replacement);
 
             const substituted = try substitute_metavar(self.allocator, replacement_pointer, id, result);
             result = substituted;
@@ -1190,7 +1187,8 @@ pub const UnifyM = struct {
             if (!metavar_set.contains(t1_scope.head.MetavarE)) {
                 new_id = t1_scope.head.*.MetavarE;
                 context_len = t1_scope.args.items.len;
-                stuck_term = constraint.right;
+                stuck_term = t2_scope.head;
+                //stuck_term = constraint.right;?
                 is_flex_rigid = true;
             }
         }
@@ -1198,7 +1196,8 @@ pub const UnifyM = struct {
         if (!is_flex_rigid and t2_scope.head.* == .MetavarE) {
             new_id = t2_scope.head.*.MetavarE;
             context_len = t2_scope.args.items.len;
-            stuck_term = constraint.left;
+            stuck_term = t1_scope.head;
+            //stuck_term = constraint.left;
             is_flex_rigid = true;
         }
 
@@ -1258,9 +1257,18 @@ pub const UnifyM = struct {
         return results;
     }
 
+    // the <+> operator
     pub fn combine_substitution(self: *UnifyM, s1: SubstMap, s2: SubstMap) !SubstMap {
         std.debug.print("In combine_substitution function\n", .{});
         var result = SubstMap.init(self.allocator);
+
+        var conflict_it = s1.iterator();
+        while (conflict_it.next()) |entry| {
+            const id = entry.key_ptr.*;
+            if (s2.contains(id)) {
+                return error.SubstitutionConflict;
+            }
+        }
 
         var it = s2.iterator();
         while (it.next()) |entry| {
