@@ -1,11 +1,12 @@
 const std = @import("std");
+var FRESH_INDEX: usize = 0;
 
 pub fn main() !void {
     const stdin = std.io.getStdIn().reader();
     const stdout = std.io.getStdOut().writer();
     const allocator = std.heap.page_allocator;
     var freed_nodes = std.AutoHashMap(*expE, void).init(allocator);
-    var used_vars = std.StringHashMap([]const u8).init(allocator);
+    var used_vars = std.StringHashMap(void).init(allocator);
     defer used_vars.deinit();
 
     var buf1: [500]u8 = undefined;
@@ -43,59 +44,77 @@ pub fn main() !void {
     try stdout.print("\n\nSecond Converted Expression: ", .{});
     try print_debruijn_exp(allocator, second_converted_exp);
 
-    var stack = Stack(StackType).init(allocator);
-    defer stack.deinit();
+    // var stack = Stack(StackType).init(allocator);
+    // defer stack.deinit();
 
     //const env = try Environment.init(allocator, null, null);
     //var state = State{ .code = converted_exp, .env = env, .stack = &stack };
 
-    try stdout.print("\n\nCorrect Result for exp1: ", .{});
-    const final_exp = try correct_beta_reduce(allocator, converted_exp);
-    try print_debruijn_exp(allocator, final_exp);
-    const final_exp2 = try correct_beta_reduce(allocator, second_converted_exp);
-    try stdout.print("\n\nCorrect Result for exp1: ", .{});
-    try print_debruijn_exp(allocator, final_exp2);
+    //try stdout.print("\n\nCorrect Result for exp1: ", .{});
+    //const final_exp = try correct_beta_reduce(allocator, converted_exp);
+    //try print_debruijn_exp(allocator, final_exp);
+    //const final_exp2 = try correct_beta_reduce(allocator, second_converted_exp);
+    //try stdout.print("\n\nCorrect Result for exp1: ", .{});
+    //try print_debruijn_exp(allocator, final_exp2);
     //try print_debruijn_exp(state.code);
     try stdout.print("\n", .{});
-    //while (try evalStep(allocator, &state)) {}
-    //try stdout.print("\n\nKrivine Machine + Beta Reduction result: ", .{});
-    //try print_debruijn_exp(allocator, state.code);
-
-    const pair = DisagreementPair{ .left = final_exp, .right = final_exp2 };
-    var pairs = std.ArrayList(DisagreementPair).init(allocator);
-    defer pairs.deinit();
-    try pairs.append(pair);
-
-    var variables = std.StringHashMap(void).init(allocator);
-    defer variables.deinit();
 
     try stdout.print("\nUnification time\n", .{});
-    const simplified_res = try simplify(allocator, pairs.items);
+    const uni_expr = try copy_expr(allocator, converted_exp);
+    const uni_expr2 = try copy_expr(allocator, second_converted_exp);
+    try print_debruijn_exp(allocator, uni_expr);
+    std.debug.print("\nand\n", .{});
+    try print_debruijn_exp(allocator, uni_expr2);
 
-    switch (simplified_res.type) {
-        .Success => {
-            try stdout.print("Yippee! Unification Successful\n", .{});
-            if (simplified_res.substitution) |subst| {
-                try stdout.print("Substitutions: \n", .{});
-                var it = subst.iterator();
-                while (it.next()) |entry| {
-                    try stdout.print("{s} -> ", .{entry.key_ptr.*});
-                    try print_debruijn_exp(allocator, entry.value_ptr.*);
-                    try stdout.print("\n\n", .{});
-                }
+    var unifier = UnifyM.init(allocator, 0);
+    const constraint = Constraint.init(uni_expr, uni_expr2);
+    const unification_result = try unifier.start_human_instrumentality(constraint);
+
+    if (unification_result) |result| {
+        try stdout.print("Unification Successful!\n\n", .{});
+
+        const substitution_map = result.@"0";
+        try stdout.print("Substitutions:\n", .{});
+
+        if (substitution_map.count() == 0) {
+            try stdout.print("  (No substitutions needed)\n", .{});
+        } else {
+            var subst_it = substitution_map.iterator();
+            while (subst_it.next()) |entry| {
+                const metavar = entry.key_ptr.*;
+                const replacement = entry.value_ptr.*;
+
+                try stdout.print("  ?{s} => ", .{metavar});
+                try print_debruijn_exp(allocator, replacement);
+                try stdout.print("\n", .{});
             }
-        },
-        .Failure => {
-            try stdout.print("Unification Failed\n", .{});
-        },
-        .Intermediate => {
-            try stdout.print("Intermediate result. Further processing required", .{});
-        },
+        }
+
+        const remaining_constraints = result.@"1";
+        try stdout.print("\nRemaining Constraints:\n", .{});
+
+        if (remaining_constraints.count() == 0) {
+            try stdout.print("  (No remaining constraints)\n", .{});
+        } else {
+            var constraint_it = remaining_constraints.keyIterator();
+            var counter: usize = 1;
+            while (constraint_it.next()) |key| {
+                try stdout.print("  Constraint {d}:\n", .{counter});
+                try stdout.print("    Left:  ", .{});
+                try print_debruijn_exp(allocator, key.left);
+                try stdout.print("\n    Right: ", .{});
+                try print_debruijn_exp(allocator, key.right);
+                try stdout.print("\n", .{});
+                counter += 1;
+            }
+        }
+    } else {
+        try stdout.print("Unification Failed: The expressions cannot be unified.\n", .{});
     }
 
     try free_exp(allocator, expstruct.resexp, &freed_nodes);
     try free_exp(allocator, converted_exp, &freed_nodes);
-    try free_exp(allocator, final_exp, &freed_nodes);
+    // try free_exp(allocator, final_exp, &freed_nodes);
     try free_exp(allocator, second_converted_exp, &freed_nodes);
 }
 
@@ -226,7 +245,7 @@ pub fn scanMetavariable(str: []const u8) []const u8 {
     return str[0..i];
 }
 
-pub fn scan(str: []u8, allocator: std.mem.Allocator, used_vars: *std.StringHashMap([]const u8)) ![]Token {
+pub fn scan(str: []u8, allocator: std.mem.Allocator, used_vars: *std.StringHashMap(void)) ![]Token {
     var tokenList = std.ArrayList(Token).init(allocator);
     defer tokenList.deinit();
 
@@ -287,7 +306,7 @@ pub fn expect_token(expectedT: tokenT, tokens: []const Token) ![]const Token {
 }
 
 const ParseResult = struct { resexp: *expE, tokenl: []const Token };
-const ParseError = error{ InputEndsButExpectedAnExpression, TokenSeenButExpected, AllocatorError, OutOfMemory, InputEndsButExpectedToken, UnboundVariableSeen };
+const ParseError = error{ InputEndsButExpectedAnExpression, TokenSeenButExpected, AllocatorError, OutOfMemory, InputEndsButExpectedToken, UnboundVariableSeen, InvalidFlexibleTerm };
 
 // Parser
 pub fn parse_exp(allocator: std.mem.Allocator, tokens: []const Token) ParseError!ParseResult {
@@ -641,145 +660,712 @@ pub fn Stack(comptime T: type) type {
 
 // Higher order unification
 
-const DisagreementPair = struct { left: *expE, right: *expE };
+pub fn exp_equal(e1: *expE, e2: *expE) bool {
+    if (@as(std.meta.Tag(expE), e1.*) != @as(std.meta.Tag(expE), e2.*)) {
+        return false;
+    }
 
-const Substitution = std.StringHashMap(*expE);
-
-const Node = struct {
-    type: NodeType,
-    disagreement_pairs: []const DisagreementPair,
-    substitution: ?Substitution = null,
-};
-
-const NodeType = enum {
-    Failure,
-    Success,
-    Intermediate,
-};
-
-pub fn is_rigid(expr: *expE) bool {
-    return switch (expr.*) {
-        .BoundVarE => true,
-        .VarE => false,
-        .MetavarE => false,
-        .UnboundVarE => false,
-        .LambdaE => |lambder| is_rigid(lambder.body),
-        .ApplyE => |app| is_rigid(app.func) and is_rigid(app.arg),
-    };
+    switch (e1.*) {
+        .VarE => |vare| {
+            const e2_vare = e2.VarE;
+            return std.mem.eql(u8, vare, e2_vare);
+        },
+        .LambdaE => |lambder| {
+            const e2_lambder = e2.LambdaE;
+            if (!std.mem.eql(u8, lambder.arg, e2_lambder.arg)) {
+                return false;
+            }
+            return exp_equal(lambder.body, e2_lambder.body);
+        },
+        .ApplyE => |app| {
+            const b_app = e2.ApplyE;
+            return exp_equal(app.func, b_app.func) and exp_equal(app.arg, b_app.arg);
+        },
+        .BoundVarE => |bvare| {
+            const e2_bvare = e2.BoundVarE;
+            return bvare == e2_bvare;
+        },
+        .UnboundVarE => |uvare| {
+            const e2_uvare = e2.UnboundVarE;
+            return std.mem.eql(u8, uvare, e2_uvare);
+        },
+        .MetavarE => |metavare| {
+            const e2_metavare = e2.MetavarE;
+            return std.mem.eql(u8, metavare, e2_metavare);
+        },
+    }
 }
 
-pub fn same_head(left: *expE, right: *expE) bool {
-    return switch (left.*) {
-        .BoundVarE => |l_var| switch (right.*) {
-            .BoundVarE => |r_var| l_var == r_var,
-            else => false,
+pub fn raise_debruijn(allocator: std.mem.Allocator, exp1: *expE, i: usize, lower: usize) !*expE {
+    std.debug.print("In raise_debruijn function\n", .{});
+    const result = try allocator.create(expE);
+
+    switch (exp1.*) {
+        .UnboundVarE => |id| {
+            result.* = expE{ .UnboundVarE = id };
         },
-        .VarE => |l_var| switch (right.*) {
-            .VarE => |r_var| std.mem.eql(u8, l_var, r_var),
-            else => false,
+        .BoundVarE => |j| {
+            if (i > lower) {
+                result.* = expE{ .BoundVarE = j + i };
+            } else {
+                result.* = expE{ .BoundVarE = j };
+            }
         },
-        .ApplyE => |l_app| switch (right.*) {
-            .ApplyE => |r_app| same_head(l_app.func, r_app.func),
-            else => false,
+        .MetavarE => |metavar| {
+            result.* = expE{ .MetavarE = metavar };
         },
-        .LambdaE => |l_lambder| switch (right.*) {
-            .LambdaE => |r_lambder| same_head(l_lambder.body, r_lambder.body),
-            else => false,
+        .ApplyE => |app| {
+            const newleft = try raise_debruijn(allocator, app.func, i, lower);
+            const newright = try raise_debruijn(allocator, app.arg, i, lower);
+            result.* = expE{ .ApplyE = .{ .func = newleft, .arg = newright } };
         },
-        else => false,
-    };
+        .LambdaE => |lambder| {
+            const newbod = try raise_debruijn(allocator, lambder.body, i, lower + 1);
+            result.* = expE{ .LambdaE = .{ .arg = lambder.arg, .body = newbod } };
+        },
+        .VarE => |vare| {
+            result.* = expE{ .VarE = vare };
+        },
+    }
+
+    return result;
 }
 
-pub fn simplify(allocator: std.mem.Allocator, pairs: []const DisagreementPair) !Node {
-    var simplified_pairs = std.ArrayList(DisagreementPair).init(allocator);
-    defer simplified_pairs.deinit();
+pub fn substitute_boundvar(allocator: std.mem.Allocator, new_term: *expE, i: usize, t: *expE) !*expE {
+    std.debug.print("In substitute_boundvar function\n", .{});
+    const result = try allocator.create(expE);
 
-    for (pairs) |pair| {
-        if (is_rigid(pair.left) and is_rigid(pair.right)) {
-            if (!same_head(pair.left, pair.right)) {
-                return Node{ .type = .Failure, .disagreement_pairs = &[_]DisagreementPair{} };
+    switch (t.*) {
+        .UnboundVarE => |id| {
+            result.* = expE{ .UnboundVarE = id };
+        },
+        .BoundVarE => |j| {
+            if (j < i) {
+                result.* = expE{ .BoundVarE = j };
+            } else if (j == i) {
+                const copied = try copy_expr(allocator, new_term);
+                result.* = copied.*;
+            } else {
+                result.* = expE{ .BoundVarE = j - 1 };
+            }
+        },
+        .MetavarE => |metavar| {
+            result.* = expE{ .MetavarE = metavar };
+        },
+        .ApplyE => |app| {
+            const newleft = try substitute_boundvar(allocator, new_term, i, app.func);
+            const newright = try substitute_boundvar(allocator, new_term, i, app.arg);
+            result.* = expE{ .ApplyE = .{ .func = newleft, .arg = newright } };
+        },
+        .LambdaE => |lambder| {
+            const raised_exp = try raise_debruijn(allocator, new_term, 1, 0);
+            const newbod = try substitute_boundvar(allocator, raised_exp, i + 1, lambder.body);
+            result.* = expE{ .LambdaE = .{ .arg = lambder.arg, .body = newbod } };
+        },
+        .VarE => |vare| {
+            result.* = expE{ .VarE = vare };
+        },
+    }
+    return result;
+}
+
+pub fn substitute_metavar(allocator: std.mem.Allocator, new_term: *expE, id: []const u8, t: *expE) !*expE {
+    std.debug.print("In substitute_metavar function\n", .{});
+    const result = try allocator.create(expE);
+
+    switch (t.*) {
+        .UnboundVarE => |uvare| {
+            result.* = expE{ .UnboundVarE = uvare };
+        },
+        .BoundVarE => |j| {
+            result.* = expE{ .BoundVarE = j };
+        },
+        .MetavarE => |metavar| {
+            if (std.mem.eql(u8, id, metavar)) {
+                const copied_exp = try copy_expr(allocator, new_term);
+                result.* = copied_exp.*;
+            } else {
+                result.* = expE{ .MetavarE = metavar };
+            }
+        },
+        .ApplyE => |app| {
+            const newleft = try substitute_metavar(allocator, new_term, id, app.func);
+            const newright = try substitute_metavar(allocator, new_term, id, app.arg);
+            result.* = expE{ .ApplyE = .{ .func = newleft, .arg = newright } };
+        },
+        .LambdaE => |lambder| {
+            const raised = try raise_debruijn(allocator, new_term, 1, 0);
+            const newbod = try substitute_metavar(allocator, raised, id, lambder.body);
+            result.* = expE{ .LambdaE = .{ .arg = lambder.arg, .body = newbod } };
+        },
+        .VarE => |vare| {
+            result.* = expE{ .VarE = vare };
+        },
+    }
+    return result;
+}
+
+pub fn substitute_unboundvar(allocator: std.mem.Allocator, new_term: *expE, id: []const u8, t: *expE) !*expE {
+    std.debug.print("In substitute_unboundvar function\n", .{});
+    const result = try allocator.create(expE);
+
+    switch (t.*) {
+        .UnboundVarE => |uvare| {
+            if (std.mem.eql(u8, id, uvare)) {
+                const copied = try copy_expr(allocator, new_term);
+                result.* = copied.*;
+            } else {
+                result.* = expE{ .UnboundVarE = uvare };
+            }
+        },
+        .BoundVarE => |j| {
+            result.* = expE{ .BoundVarE = j };
+        },
+        .MetavarE => |metavar| {
+            result.* = expE{ .MetavarE = metavar };
+        },
+        .ApplyE => |app| {
+            const newleft = try substitute_unboundvar(allocator, new_term, id, app.func);
+            const newright = try substitute_unboundvar(allocator, new_term, id, app.arg);
+            result.* = expE{ .ApplyE = .{ .func = newleft, .arg = newright } };
+        },
+        .LambdaE => |lambder| {
+            const raised = try raise_debruijn(allocator, new_term, 1, 0);
+            const newbod = try substitute_unboundvar(allocator, raised, id, lambder.body);
+            result.* = expE{ .LambdaE = .{ .arg = lambder.arg, .body = newbod } };
+        },
+        .VarE => |vare| {
+            result.* = expE{ .VarE = vare };
+        },
+    }
+    return result;
+}
+
+const MetavarSet = std.StringHashMap(void);
+const ConstraintSet = std.AutoHashMap(Constraint, void);
+const SubstMap = std.StringHashMap(*expE);
+
+pub fn find_all_metavars(allocator: std.mem.Allocator, term: *expE) !MetavarSet {
+    std.debug.print("In find_all_metavars function\n", .{});
+    var result = MetavarSet.init(allocator);
+
+    switch (term.*) {
+        .VarE, .BoundVarE, .UnboundVarE => {},
+        .MetavarE => |metavar| {
+            try result.put(metavar, {});
+        },
+        .ApplyE => |app| {
+            var left_set = try find_all_metavars(allocator, app.func);
+            defer left_set.deinit();
+
+            var right_set = try find_all_metavars(allocator, app.arg);
+            defer right_set.deinit();
+
+            var it = left_set.keyIterator();
+            while (it.next()) |key| {
+                try result.put(key.*, {});
             }
 
-            try breakdown(pair, &simplified_pairs);
-            continue;
-        }
-
-        try simplified_pairs.append(pair);
-    }
-
-    var normal_pairs = std.ArrayList(DisagreementPair).init(allocator);
-    defer normal_pairs.deinit();
-
-    for (simplified_pairs.items) |pair| {
-        if (is_rigid(pair.left) and !is_rigid(pair.right)) {
-            try normal_pairs.append(.{ .left = pair.right, .right = pair.left });
-        } else {
-            try normal_pairs.append(pair);
-        }
-    }
-    if (check_flexibility(normal_pairs.items)) {
-        return create_success_node(allocator, normal_pairs.items);
-    }
-
-    const final = try allocator.dupe(DisagreementPair, normal_pairs.items);
-    return Node{ .type = .Intermediate, .disagreement_pairs = final };
-}
-
-pub fn check_flexibility(pairs: []const DisagreementPair) bool {
-    for (pairs) |pair| {
-        if (is_rigid(pair.left) or is_rigid(pair.right)) {
-            return false;
-        }
-    }
-    return true;
-}
-
-pub fn breakdown(pair: DisagreementPair, res: *std.ArrayList(DisagreementPair)) !void {
-    switch (pair.left.*) {
-        .ApplyE => |l_app| switch (pair.right.*) {
-            .ApplyE => |r_app| {
-                try res.append(.{ .left = l_app.func, .right = r_app.func });
-                try res.append(.{ .left = l_app.arg, .right = r_app.arg });
-            },
-            else => {},
+            var it2 = right_set.keyIterator();
+            while (it2.next()) |key| {
+                try result.put(key.*, {});
+            }
         },
-        .LambdaE => |l_lambder| switch (pair.right.*) {
-            .LambdaE => |r_lambder| {
-                try res.append(.{ .left = l_lambder.body, .right = r_lambder.body });
-            },
-            else => {},
+        .LambdaE => |lambder| {
+            var body_set = try find_all_metavars(allocator, lambder.body);
+            defer body_set.deinit();
+
+            var it = body_set.keyIterator();
+            while (it.next()) |key| {
+                try result.put(key.*, {});
+            }
         },
-        else => {},
+    }
+    return result;
+}
+
+pub fn is_closed(expr: *expE) bool {
+    std.debug.print("In is_closed function\n", .{});
+    switch (expr.*) {
+        .UnboundVarE, .VarE => return false,
+        .MetavarE, .BoundVarE => return true,
+        .ApplyE => |app| {
+            return is_closed(app.func) and is_closed(app.arg);
+        },
+        .LambdaE => |lambder| {
+            return is_closed(lambder.body);
+        },
     }
 }
 
-pub fn create_success_node(allocator: std.mem.Allocator, pairs: []const DisagreementPair) !Node {
-    var subst = Substitution.init(allocator);
+pub fn reduce(allocator: std.mem.Allocator, expr: *expE) !*expE {
+    std.debug.print("In reduce function\n", .{});
+    switch (expr.*) {
+        .MetavarE, .BoundVarE, .UnboundVarE, .VarE => return expr,
+        .ApplyE => |app| {
+            const reduced_left = try reduce(allocator, app.func);
 
-    for (pairs) |pair| {
-        switch (pair.left.*) {
-            .MetavarE => |metavar| {
-                try subst.put(metavar, pair.right);
+            if (reduced_left.* == .LambdaE) {
+                const lam_body = reduced_left.*.LambdaE.body;
+                const reduced_right = try reduce(allocator, app.arg);
+                const right_pointer = try copy_expr(allocator, reduced_right);
+
+                const subst = try substitute_boundvar(allocator, right_pointer, 1, lam_body);
+                FRESH_INDEX += 1;
+                return try reduce(allocator, subst);
+            } else {
+                const left_pointer = try copy_expr(allocator, reduced_left);
+                const reduced_right = try reduce(allocator, app.arg);
+
+                const result = try allocator.create(expE);
+                result.* = expE{ .ApplyE = .{ .func = left_pointer, .arg = reduced_right } };
+                std.debug.print("After reducing: ", .{});
+                try print_debruijn_exp(allocator, result);
+                std.debug.print("\n", .{});
+                return result;
+            }
+        },
+        .LambdaE => |lambder| {
+            const reducedbod = try reduce(allocator, lambder.body);
+            const result = try allocator.create(expE);
+            result.* = expE{ .LambdaE = .{ .arg = lambder.arg, .body = reducedbod } };
+            return result;
+        },
+    }
+}
+
+pub fn is_stuck(expr: *expE) bool {
+    std.debug.print("In is_stuck function\n", .{});
+    switch (expr.*) {
+        .MetavarE => return true,
+        .ApplyE => |app| return is_stuck(app.func),
+        else => return false,
+    }
+}
+
+pub const ApTelescope = struct {
+    head: *expE,
+    args: std.ArrayList(*expE),
+};
+
+pub fn peepApTelescope(allocator: std.mem.Allocator, expr: *expE) !ApTelescope {
+    std.debug.print("In peepApTelescope function\n", .{});
+    var result = ApTelescope{ .head = undefined, .args = std.ArrayList(*expE).init(allocator) };
+
+    var current = expr;
+    while (true) {
+        switch (current.*) {
+            .ApplyE => |app| {
+                try result.args.append(app.arg);
+                current = app.func;
             },
-            .UnboundVarE => |uvare| {
-                try subst.put(uvare, pair.right);
+            else => {
+                result.head = current;
+                break;
             },
-            else => {},
         }
     }
 
-    return Node{ .type = .Success, .disagreement_pairs = pairs, .substitution = subst };
+    std.mem.reverse(*expE, result.args.items);
+    std.debug.print("\nPeepApTelescope Results: ", .{});
+    try print_debruijn_exp(allocator, result.head);
+    std.debug.print("\n", .{});
+    return result;
 }
 
-pub fn generate_fresh_var(allocator: std.mem.Allocator, used_vars: *std.StringHashMap([]const u8)) []const u8 {
+pub fn applyApTelescope(allocator: std.mem.Allocator, head: *expE, args: []const *expE) !*expE {
+    std.debug.print("In applyApTelescope function\n", .{});
+    var result = head.*;
+    for (args) |arg| {
+        const left_pointer = try allocator.create(expE);
+        left_pointer.* = result;
+
+        const right_pointer = try allocator.create(expE);
+        right_pointer.* = arg;
+        result = expE{ .ApplyE = .{ .func = left_pointer, .arg = right_pointer } };
+    }
+    return result;
+}
+
+pub const Constraint = struct {
+    left: *expE,
+    right: *expE,
+
+    pub fn init(l: *expE, r: *expE) Constraint {
+        return .{ .left = l, .right = r };
+    }
+
+    pub fn equals(self: Constraint, other: Constraint) bool {
+        return exp_equal(self.left, other.left) and exp_equal(self.right, other.right);
+    }
+};
+
+pub const UnifyM = struct {
+    allocator: std.mem.Allocator,
+    next_id: usize,
+
+    pub fn init(all: std.mem.Allocator, start_id: usize) UnifyM {
+        return .{ .allocator = all, .next_id = start_id };
+    }
+
+    pub fn gen(self: *UnifyM) usize {
+        const id = self.next_id;
+        self.next_id += 1;
+        return id;
+    }
+
+    pub fn simplify(self: *UnifyM, constraint: Constraint) !ConstraintSet {
+        std.debug.print("In simplify function\n", .{});
+        var result = ConstraintSet.init(self.allocator);
+
+        const t1 = constraint.left;
+        const t2 = constraint.right;
+
+        if (exp_equal(t1, t2)) {
+            var metavar_set = try find_all_metavars(self.allocator, t1);
+            defer metavar_set.deinit();
+
+            if (metavar_set.count() == 0) {
+                return result;
+            }
+        }
+
+        const reduced_t1 = try reduce(self.allocator, t1);
+        if (!exp_equal(reduced_t1, t1)) {
+            std.debug.print("TRUE!\n\n", .{});
+            return self.simplify(Constraint.init(reduced_t1, t2));
+        }
+
+        const reduced_t2 = try reduce(self.allocator, t2);
+        if (!exp_equal(reduced_t2, t2)) {
+            return self.simplify(Constraint.init(t1, reduced_t2));
+        }
+
+        const t1_tele = try peepApTelescope(self.allocator, t1);
+        defer t1_tele.args.deinit();
+
+        const t2_tele = try peepApTelescope(self.allocator, t2);
+        defer t2_tele.args.deinit();
+
+        if (t1_tele.head.* == .UnboundVarE and t2_tele.head.* == .UnboundVarE) {
+            const i = t1_tele.head.*.UnboundVarE;
+            const j = t2_tele.head.*.UnboundVarE;
+
+            if (std.mem.eql(u8, i, j) and t1_tele.args.items.len == t2_tele.args.items.len) {
+                for (t1_tele.args.items, t2_tele.args.items) |arg1, arg2| {
+                    var sub_constraints = try self.simplify(Constraint.init(arg1, arg2));
+                    defer sub_constraints.deinit();
+
+                    var it = sub_constraints.keyIterator();
+                    while (it.next()) |key| {
+                        try result.put(key.*, {});
+                    }
+                }
+                return result;
+            } else {
+                std.debug.print("Unification failed. Lengths are not the same!\n", .{});
+                return result;
+            }
+        }
+
+        if (t1.* == .LambdaE and t2.* == .LambdaE) {
+            const body1 = t1.*.LambdaE.body;
+            const body2 = t2.*.LambdaE.body;
+
+            const fresh_id = self.gen();
+            const fresh_var = get_fresh_var(fresh_id);
+            const v = expE{ .UnboundVarE = fresh_var };
+            const v_pointer = try self.allocator.create(expE);
+            v_pointer.* = v;
+
+            const subst1 = try substitute_boundvar(self.allocator, v_pointer, 0, body1);
+            const subst2 = try substitute_boundvar(self.allocator, v_pointer, 0, body2);
+
+            try result.put(Constraint.init(subst1, subst2), {});
+            return result;
+        }
+
+        if (is_stuck(t1) or is_stuck(t2)) {
+            try result.put(constraint, {});
+            return result;
+        }
+
+        return result;
+    }
+
+    pub fn repeatedly_simplify(self: *UnifyM, constraints: ConstraintSet) !ConstraintSet {
+        std.debug.print("In repeatedly_simplify function\n", .{});
+        var result = ConstraintSet.init(self.allocator);
+
+        var it = constraints.keyIterator();
+        while (it.next()) |key| {
+            var simplified = try self.simplify(key.*);
+            defer simplified.deinit();
+
+            var sub_it = simplified.keyIterator();
+            while (sub_it.next()) |sub_key| {
+                try result.put(sub_key.*, {});
+            }
+        }
+
+        if (result.count() == constraints.count()) {
+            var equal = true;
+            var result_it = result.keyIterator();
+
+            while (result_it.next()) |res_key| {
+                if (!constraints.contains(res_key.*)) {
+                    equal = false;
+                    break;
+                }
+            }
+
+            if (equal) {
+                return result;
+            }
+        }
+        return self.repeatedly_simplify(result);
+    }
+
+    pub fn apply_substitution(self: *UnifyM, subst: SubstMap, expr: *expE) !*expE {
+        std.debug.print("In apply_substitution function\n", .{});
+        var result = expr;
+
+        var it = subst.iterator();
+        while (it.next()) |entry| {
+            const id = entry.key_ptr.*;
+            const replacement = entry.value_ptr.*;
+
+            const replacement_pointer = try self.allocator.create(expE);
+            replacement_pointer.* = replacement.*;
+
+            const substituted = try substitute_metavar(self.allocator, replacement_pointer, id, result);
+            result = substituted;
+        }
+
+        return result;
+    }
+
+    pub fn apply_substitution_to_constraint(self: *UnifyM, subst: SubstMap, constraints: ConstraintSet) !ConstraintSet {
+        std.debug.print("In apply_substitution to constrint function\n", .{});
+        var result = ConstraintSet.init(self.allocator);
+
+        var it = constraints.keyIterator();
+        while (it.next()) |key| {
+            const t1 = try self.apply_substitution(subst, key.left);
+            std.debug.print("apply_subst_to_constraint t1: ", .{});
+            try print_debruijn_exp(self.allocator, t1);
+            std.debug.print("\n", .{});
+            const t2 = try self.apply_substitution(subst, key.right);
+            std.debug.print("apply_subst_to_constraint t1: ", .{});
+            try print_debruijn_exp(self.allocator, t2);
+            std.debug.print("\n", .{});
+            try result.put(Constraint.init(t1, t2), {});
+        }
+        return result;
+    }
+
+    pub fn is_flex_flex(constraint: Constraint) bool {
+        return is_stuck(constraint.left) and is_stuck(constraint.right);
+    }
+
+    pub fn try_flex_rigid(self: *UnifyM, constraint: Constraint) !std.ArrayList(SubstMap) {
+        std.debug.print("In try_flex_rigid function\n", .{});
+        var results = std.ArrayList(SubstMap).init(self.allocator);
+
+        const t1_scope = try peepApTelescope(self.allocator, constraint.left);
+        defer t1_scope.args.deinit();
+
+        const t2_scope = try peepApTelescope(self.allocator, constraint.right);
+        defer t2_scope.args.deinit();
+
+        var new_id: ?[]const u8 = null;
+        var context_len: usize = 0;
+        var stuck_term: *expE = undefined;
+        var is_flex_rigid = false;
+
+        if (t1_scope.head.* == .MetavarE) {
+            var metavar_set = try find_all_metavars(self.allocator, constraint.right);
+            defer metavar_set.deinit();
+
+            if (!metavar_set.contains(t1_scope.head.MetavarE)) {
+                new_id = t1_scope.head.*.MetavarE;
+                context_len = t1_scope.args.items.len;
+                stuck_term = constraint.right;
+                is_flex_rigid = true;
+            }
+        }
+
+        if (!is_flex_rigid and t2_scope.head.* == .MetavarE) {
+            new_id = t2_scope.head.*.MetavarE;
+            context_len = t2_scope.args.items.len;
+            stuck_term = constraint.left;
+            is_flex_rigid = true;
+        }
+
+        if (!is_flex_rigid) {
+            return results;
+        }
+
+        const mv = new_id.?;
+        var nargs: usize = 0;
+        while (nargs <= context_len + 3) : (nargs += 1) {
+            var subst = SubstMap.init(self.allocator);
+            const inner_mv = get_fresh_var(FRESH_INDEX);
+            FRESH_INDEX += 1;
+            var inner_term = try self.allocator.create(expE);
+            inner_term.* = expE{ .MetavarE = inner_mv };
+            var arg_index: usize = 0;
+            while (arg_index < nargs) : (arg_index += 1) {
+                const arg = try self.allocator.create(expE);
+                arg.* = expE{ .BoundVarE = arg_index };
+                const ap = try self.allocator.create(expE);
+                ap.* = expE{ .ApplyE = .{ .func = inner_term, .arg = arg } };
+            }
+        }
+
+        var i: usize = 0;
+        while (i < context_len) : (i += 1) {
+            var subst = SubstMap.init(self.allocator);
+            const term = try self.allocator.create(expE);
+            term.* = expE{ .BoundVarE = i };
+            var j: usize = 0;
+
+            while (j < context_len) : (j += 1) {
+                term.* = expE{ .LambdaE = .{ .arg = "", .body = try self.allocator.create(expE) } };
+                term.LambdaE.body.* = term.*;
+            }
+            try subst.put(mv, term);
+            try results.append(subst);
+        }
+
+        if (is_closed(stuck_term)) {
+            var subst = SubstMap.init(self.allocator);
+
+            const term = stuck_term;
+            var j: usize = 0;
+            while (j < context_len) : (j += 1) {
+                var term_ptr = try self.allocator.create(expE);
+                term_ptr = term;
+                term.* = expE{ .LambdaE = .{ .arg = "", .body = term_ptr } };
+            }
+            try subst.put(mv, term);
+            try results.append(subst);
+        }
+        return results;
+    }
+
+    pub fn combine_substitution(self: *UnifyM, s1: SubstMap, s2: SubstMap) !SubstMap {
+        std.debug.print("In combine_substitution function\n", .{});
+        var result = SubstMap.init(self.allocator);
+
+        var it = s2.iterator();
+        while (it.next()) |entry| {
+            const id = entry.key_ptr.*;
+            const expr = entry.value_ptr;
+
+            const updated_expr = try self.apply_substitution(s1, expr.*);
+            try result.put(id, updated_expr);
+        }
+
+        it = s1.iterator();
+        while (it.next()) |entry| {
+            const id = entry.key_ptr.*;
+            if (!result.contains(id)) {
+                try result.put(id, entry.value_ptr.*);
+            }
+        }
+        return result;
+    }
+
+    pub fn unify(self: *UnifyM, subst: SubstMap, constraint: ConstraintSet) !?struct { SubstMap, ConstraintSet } {
+        std.debug.print("In unify function\n", .{});
+        var constraint_set = try self.apply_substitution_to_constraint(subst, constraint);
+        defer constraint_set.deinit();
+
+        var cs_simplified = try self.repeatedly_simplify(constraint_set);
+        defer cs_simplified.deinit();
+
+        var flex_flex = ConstraintSet.init(self.allocator);
+        defer flex_flex.deinit();
+
+        var flex_rigid = ConstraintSet.init(self.allocator);
+        defer flex_rigid.deinit();
+
+        var it = cs_simplified.keyIterator();
+        while (it.next()) |key| {
+            if (is_flex_flex(key.*)) {
+                try flex_flex.put(key.*, {});
+            } else {
+                try flex_rigid.put(key.*, {});
+            }
+        }
+
+        if (flex_rigid.count() == 0) {
+            var result_constraints = ConstraintSet.init(self.allocator);
+            var ff_it = flex_flex.keyIterator();
+            while (ff_it.next()) |key| {
+                try result_constraints.put(key.*, {});
+            }
+            return .{ subst, result_constraints };
+        }
+
+        var flex_rigid_it = flex_rigid.keyIterator();
+        if (flex_rigid_it.next()) |key| {
+            const possible_substs = try self.try_flex_rigid(key.*);
+            defer possible_substs.deinit();
+
+            for (possible_substs.items) |new_subst| {
+                const combine_subst = try self.combine_substitution(new_subst, subst);
+                var all_constraints = ConstraintSet.init(self.allocator);
+                var c_it = flex_rigid.keyIterator();
+                while (c_it.next()) |c_key| {
+                    try all_constraints.put(c_key.*, {});
+                }
+
+                c_it = flex_flex.keyIterator();
+                while (c_it.next()) |c_key| {
+                    try all_constraints.put(c_key.*, {});
+                }
+
+                const result = try self.unify(combine_subst, all_constraints);
+                if (result != null) {
+                    return result;
+                }
+            }
+        }
+        return null;
+    }
+
+    pub fn start_human_instrumentality(self: *UnifyM, constraint: Constraint) !?struct { SubstMap, ConstraintSet } {
+        std.debug.print("Jarvis, start human instrumentality...\n", .{});
+        var constraints = ConstraintSet.init(self.allocator);
+        defer constraints.deinit();
+
+        try constraints.put(constraint, {});
+
+        const empty_subst = SubstMap.init(self.allocator);
+        return try self.unify(empty_subst, constraints);
+    }
+};
+
+fn get_fresh_var(fresh_id: usize) []const u8 {
+    std.debug.print("In get_fresh_var function\n", .{});
+    const ascii_char = @as(u8, @intCast((fresh_id % 26) + 'A'));
+    var buffer: [1]u8 = undefined;
+    buffer[0] = ascii_char;
+    return buffer[0..];
+}
+
+pub fn generate_fresh_var(allocator: std.mem.Allocator, used_vars: *std.StringHashMap(void)) ![]const u8 {
     var start: u8 = 'A';
-    while (start <= 'Z') {
-        if (!used_vars.contains(start)) {
-            const res = try allocator.dupe(u8, start);
+    while (start <= 'Z') : (start += 1) {
+        const var_name = [_]u8{start};
+        const key = var_name[0..1];
+        if (!used_vars.contains(key)) {
+            const res = try allocator.dupe(u8, key);
             try used_vars.put(res, {});
             return res;
         }
-        start = start + 1;
     }
 
     var i: usize = 1;
@@ -787,241 +1373,12 @@ pub fn generate_fresh_var(allocator: std.mem.Allocator, used_vars: *std.StringHa
         var c: u8 = 'A';
         while (c <= 'Z') : (c += 1) {
             const var_name = try std.fmt.allocPrint(allocator, "{c}{d}", .{ c, i });
-            defer allocator.free(var_name);
 
             if (!used_vars.contains(var_name)) {
-                const result = try allocator.dupe(u8, var_name);
-                try used_vars.put(result, {});
-                return result;
+                try used_vars.put(var_name, {});
+                return var_name;
             }
+            allocator.free(var_name);
         }
     }
 }
-
-pub fn get_head(exp: *expE) *expE {
-    switch (exp.*) {
-        .ApplyE => {
-            var curr = exp;
-            while (curr.* == .ApplyE) {
-                curr = &curr.ApplyE.func.*;
-            }
-            return curr;
-        },
-        else => return exp,
-    }
-}
-
-pub fn is_constant(exp: *expE) bool {
-    return switch (exp.*) {
-        .UnboundVarE => true,
-        else => false,
-    };
-}
-
-pub fn get_args(allocator: std.mem.Allocator, exp: *expE) !std.ArrayList(*expE) {
-    var args = std.ArrayList(*expE).init(allocator);
-    //defer args.deinit();
-
-    var cur = exp;
-    var args_list = std.ArrayList(*expE).init(allocator);
-    defer args_list.deinit();
-
-    while (cur.* == .ApplyE) {
-        try args_list.append(&cur.ApplyE.arg.*);
-        cur = &cur.ApplyE.func.*;
-    }
-
-    var i = args_list.items.len;
-    while (i > 0) {
-        i -= 1;
-        const arg = try copy_expr(allocator, args_list.items[i]);
-        try args.append(arg);
-    }
-    return args;
-}
-
-pub fn create_imitation_subst(allocator: std.mem.Allocator, metavar: []const u8, rigid_head: *expE, flex_args_len: usize, rigid_args_len: usize, variables: *std.StringHashMap(void)) !Substitution {
-    var cur_exp = undefined;
-    var lambder_bod = undefined;
-
-    const head_clone = switch (rigid_head.*) {
-        .UnboundVarE => |uvare| blk: {
-            const name = try allocator.dupe(u8, uvare);
-            const head = try allocator.create(expE);
-            head.* = expE{ .UnboundVarE = name };
-            break :blk head;
-        },
-        else => unreachable,
-    };
-
-    cur_exp = head_clone;
-    for (0..rigid_args_len) |_| {
-        const fresh_var = generate_fresh_var(allocator, variables);
-        const metavar_exp = try allocator.create(expE);
-        metavar_exp.* = expE{ .MetavarE = fresh_var };
-
-        var param_app = metavar_exp;
-        for (0..flex_args_len) |j| {
-            const param_index = try allocator.create(expE);
-            param_index.* = expE{ .BoundVarE = flex_args_len - j - 1 };
-
-            const new_app = try allocator.create(expE);
-            new_app.* = expE{ .ApplyE = .{ .func = cur_exp, .arg = param_app } };
-            param_app = new_app;
-        }
-        const new_app2 = try allocator.create(expE);
-        new_app2.* = expE{ .ApplyE = .{ .func = cur_exp, .arg = param_app } };
-        cur_exp = new_app2;
-    }
-
-    lambder_bod = cur_exp;
-    var replace = lambder_bod;
-    for (0..flex_args_len) |i| {
-        const param_name = try std.fmt.allocPrint(allocator, "z_{d}", .{flex_args_len - i - 1});
-        const new_lambder = try allocator.create(expE);
-        new_lambder.* = expE{ .LambdaE = .{ .arg = param_name, .body = replace } };
-        replace = new_lambder;
-    }
-    const subst = Substitution.init(allocator);
-    const var_name = try allocator.dupe(u8, metavar);
-    try subst.put(var_name, replace);
-    return subst;
-}
-
-pub fn create_projection_subst(allocator: std.mem.Allocator, metavar: []const u8, projection_index: usize, flex_args_len: usize, result_args_len: usize, variables: *std.StringHashMap(void)) !Substitution {
-    var lambder_bod: *expE = undefined;
-
-    const proj_var = try allocator.create(expE);
-    proj_var.* = expE{ .BoundVarE = flex_args_len - projection_index - 1 };
-
-    const cur_exp = proj_var;
-
-    for (0..result_args_len) |_| {
-        const fresh_var = try generate_fresh_var(allocator, variables);
-        const metavar_exp = try allocator.create(expE);
-        metavar_exp.* = expE{ .MetavarE = fresh_var };
-
-        var param_app = metavar_exp;
-        for (0..flex_args_len) |j| {
-            const param_index = try allocator.create(expE);
-            param_index.* = expE{ .BoundVarE = flex_args_len - j - 1 };
-
-            const new_app = try allocator.create(expE);
-            new_app.* = expE{ .ApplyE = .{ .func = param_app, .arg = param_index } };
-            param_app = new_app;
-        }
-
-        const new_app = try allocator.create(expE);
-        new_app.* = expE{ .ApplyE = .{ .func = cur_exp, .arg = param_app } };
-    }
-
-    lambder_bod = cur_exp;
-    var replace = lambder_bod;
-    for (0..flex_args_len) |i| {
-        const param_name = try std.fmt.allocPrint(allocator, "z_{d}", .{flex_args_len - i - 1});
-        const new_lambder = try allocator.create(expE);
-        new_lambder.* = expE{ .LambdaE = .{ .arg = param_name, .body = replace } };
-        replace = new_lambder;
-    }
-
-    const new_subst = Substitution.init(allocator);
-    const var_name = try allocator.dupe(u8, metavar);
-    try new_subst.put(var_name, replace);
-    return new_subst;
-}
-
-pub fn get_arity(exp: *expE) usize {
-    var count: usize = 0;
-    var cur_exp = exp;
-
-    while (cur_exp.* == .LambdaE) {
-        count += 1;
-        cur_exp = cur_exp.LambdaE.body;
-    }
-
-    return count;
-}
-
-pub fn match(allocator: std.mem.Allocator, flexible_term: *expE, rigid_term: *expE, variables: std.StringHashMap(void)) !std.ArrayList(Substitution) {
-    var subst = std.ArrayList(Substitution).init(allocator);
-
-    const head = get_head(flexible_term);
-
-    const metavar_name = switch (head.*) {
-        .MetavarE => |name| name,
-        else => return errors.InvalidFlexibleTerm,
-    };
-    const rigid_head = get_head(rigid_term);
-
-    const flex_args = try get_args(allocator, flexible_term);
-    // defer {
-    //     for(flex_args.items) |arg| {
-    //         free_exp(allocator, arg, freed_nodes: *std.AutoHashMap(*expE, void))
-    //     }
-    // }
-    const rigid_args = try get_args(rigid_term);
-
-    // Imitation (if rigid head is constant)
-    if (is_constant(rigid_head)) {
-        const imitation_subst = try create_imitation_subst(allocator, metavar_name, rigid_head, flex_args.items.len, rigid_args.items.len, variables);
-        try subst.append(imitation_subst);
-    }
-
-    // Projection
-    for (0..flex_args.items.len) |i| {
-        const arg_arity = 1;
-
-        const projection_subst = try create_projection_subst(allocator, metavar_name, i, flex_args.items.len, arg_arity, variables);
-        try subst.append(projection_subst);
-    }
-
-    return subst;
-}
-
-// test
-
-// pub fn evalStep(allocator: std.mem.Allocator, state: *State) !bool {
-//     switch (state.code.*) {
-//         .VarE => {
-//             std.debug.print("In the VarE portion of Krivine Machine\n", .{});
-//             if (state.env.lookup(0)) |closure| {
-//                 state.code = closure.exp;
-//                 state.env = closure.env;
-//             } else {
-//                 return errors.UnboundVariableSeen;
-//             }
-//         },
-//         .LambdaE => |lambder| {
-//             if (state.stack.pop()) |top| {
-//                 std.debug.print("Popping {any} from the stack!\n", .{top});
-//                 const closure = try allocator.create(Closure);
-//                 closure.* = .{ .exp = top.c, .env = top.oldenv };
-//                 const env1 = try Environment.init(allocator, closure, state.env);
-//                 state.code = lambder.body;
-//                 state.env = env1;
-//             } else {
-//                 const reduced_expr = try correct_beta_reduce(allocator, lambder.body);
-//                 const new_lambda_exp = try allocator.create(expE);
-//                 new_lambda_exp.* = .{ .LambdaE = .{ .arg = "", .body = reduced_expr } };
-//                 state.code = new_lambda_exp;
-//                 std.debug.print("Nothing on the stack. Returning False\n", .{});
-//                 return false;
-//             }
-//         },
-//         .ApplyE => |app| {
-//             std.debug.print("In the ApplyE portion of Krivine Machine\n", .{});
-//             try state.stack.push(.{ .c = app.arg, .oldenv = state.env });
-//             state.code = app.func;
-//         },
-//         .BoundVarE => {
-//             if (state.env.lookup(0)) |closure| {
-//                 state.code = closure.exp;
-//                 state.env = closure.env;
-//             } else {
-//                 return errors.UnboundVariableSeen;
-//             }
-//         },
-//         .UnboundVarE => {},
-//     }
-//     return true;
-// }
