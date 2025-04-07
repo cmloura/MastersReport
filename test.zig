@@ -910,7 +910,6 @@ pub fn reduce(allocator: std.mem.Allocator, expr: *expE) !*expE {
                 const reduced_right = try reduce(allocator, app.arg);
                 const right_pointer = try copy_expr(allocator, reduced_right);
                 const subst = try substitute_boundvar(allocator, right_pointer, 1, lam_body);
-                FRESH_INDEX += 1;
                 return try reduce(allocator, subst);
             } else {
                 const left_pointer = try copy_expr(allocator, reduced_left);
@@ -918,9 +917,6 @@ pub fn reduce(allocator: std.mem.Allocator, expr: *expE) !*expE {
 
                 const result = try allocator.create(expE);
                 result.* = expE{ .ApplyE = .{ .func = left_pointer, .arg = reduced_right } };
-                std.debug.print("After reducing: ", .{});
-                try print_debruijn_exp(allocator, result);
-                std.debug.print("\n", .{});
                 return result;
             }
         },
@@ -966,9 +962,6 @@ pub fn peepApTelescope(allocator: std.mem.Allocator, expr: *expE) !ApTelescope {
     }
 
     std.mem.reverse(*expE, result.args.items);
-    std.debug.print("\nPeepApTelescope Results: ", .{});
-    try print_debruijn_exp(allocator, result.head);
-    std.debug.print("\n", .{});
     return result;
 }
 
@@ -1029,12 +1022,18 @@ pub const UnifyM = struct {
             }
         }
         const reduced_t1 = try reduce(self.allocator, t1);
+        std.debug.print("Reduced t1: ", .{});
+        try print_debruijn_exp(self.allocator, reduced_t1);
+        std.debug.print("\n", .{});
         if (!exp_equal(reduced_t1, t1)) {
             std.debug.print("TRUE!\n\n", .{});
             return self.simplify(Constraint.init(reduced_t1, t2));
         }
 
         const reduced_t2 = try reduce(self.allocator, t2);
+        std.debug.print("Reduced t2: ", .{});
+        try print_debruijn_exp(self.allocator, reduced_t2);
+        std.debug.print("\n", .{});
         if (!exp_equal(reduced_t2, t2)) {
             return self.simplify(Constraint.init(t1, reduced_t2));
         }
@@ -1042,7 +1041,13 @@ pub const UnifyM = struct {
         const t1_tele = try peepApTelescope(self.allocator, t1);
         defer t1_tele.args.deinit();
 
+        std.debug.print("t1 telescope head: ", .{});
+        try print_debruijn_exp(self.allocator, t1_tele.head);
+        std.debug.print("\n", .{});
         const t2_tele = try peepApTelescope(self.allocator, t2);
+        std.debug.print("t2 telescope head: ", .{});
+        try print_debruijn_exp(self.allocator, t2_tele.head);
+        std.debug.print("\n", .{});
         defer t2_tele.args.deinit();
 
         if (t1_tele.head.* == .UnboundVarE and t2_tele.head.* == .UnboundVarE) {
@@ -1072,12 +1077,26 @@ pub const UnifyM = struct {
 
             const fresh_id = self.gen();
             const fresh_var = get_fresh_var(fresh_id);
-            const v = expE{ .UnboundVarE = fresh_var };
+            const str_version = [_]u8{fresh_var};
+            const slice = str_version[0..];
+
+            std.debug.print("Fresh var: {c}\n", .{fresh_var});
+            const v = expE{ .UnboundVarE = slice };
             const v_pointer = try self.allocator.create(expE);
             v_pointer.* = v;
 
-            const subst1 = try substitute_boundvar(self.allocator, v_pointer, 0, body1);
-            const subst2 = try substitute_boundvar(self.allocator, v_pointer, 0, body2);
+            const subst1 = try substitute_boundvar(self.allocator, v_pointer, 1, body1);
+            std.debug.print("subst1 after substituting ", .{});
+            try print_debruijn_exp(self.allocator, v_pointer);
+            std.debug.print(": ", .{});
+            try print_debruijn_exp(self.allocator, subst1);
+            std.debug.print("\n", .{});
+            const subst2 = try substitute_boundvar(self.allocator, v_pointer, 1, body2);
+            std.debug.print("subst2 after substituting ", .{});
+            try print_debruijn_exp(self.allocator, v_pointer);
+            std.debug.print(": ", .{});
+            try print_debruijn_exp(self.allocator, subst2);
+            std.debug.print("\n", .{});
 
             try result.put(Constraint.init(subst1, subst2), {});
             return result;
@@ -1360,12 +1379,11 @@ pub const UnifyM = struct {
     }
 };
 
-fn get_fresh_var(fresh_id: usize) []const u8 {
+fn get_fresh_var(fresh_id: usize) u8 {
     std.debug.print("In get_fresh_var function\n", .{});
-    const ascii_char = @as(u8, @intCast((fresh_id % 26) + 'A'));
-    var buffer: [1]u8 = undefined;
-    buffer[0] = ascii_char;
-    return buffer[0..];
+    const ascii_char = @as(u8, @intCast((fresh_id % 26) + 'a'));
+    std.debug.print("ascii_char: {c}\n", .{ascii_char});
+    return ascii_char;
 }
 
 pub fn generate_fresh_var(allocator: std.mem.Allocator, used_vars: *std.StringHashMap(void)) ![]const u8 {
