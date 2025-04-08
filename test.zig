@@ -743,8 +743,7 @@ pub fn substitute_boundvar(allocator: std.mem.Allocator, new_term: *expE, i: usi
             if (j < i) {
                 result.* = expE{ .BoundVarE = j };
             } else if (j == i) {
-                const copied = try copy_expr(allocator, new_term);
-                result.* = copied.*;
+                return try copy_expr(allocator, new_term);
             } else {
                 result.* = expE{ .BoundVarE = j - 1 };
             }
@@ -1014,6 +1013,7 @@ pub const UnifyM = struct {
         const t2 = constraint.right;
 
         if (exp_equal(t1, t2)) {
+            std.debug.print("t1 and t2 are equal!\n", .{});
             var metavar_set = try find_all_metavars(self.allocator, t1);
             defer metavar_set.deinit();
 
@@ -1066,7 +1066,6 @@ pub const UnifyM = struct {
                 }
                 return result;
             } else {
-                std.debug.print("Unification failed. Lengths are not the same!\n", .{});
                 return result;
             }
         }
@@ -1076,12 +1075,12 @@ pub const UnifyM = struct {
             const body2 = t2.*.LambdaE.body;
 
             const fresh_id = self.gen();
-            const fresh_var = get_fresh_var(fresh_id);
-            const str_version = [_]u8{fresh_var};
-            const slice = str_version[0..];
+            const fresh_var = get_fresh_var(fresh_id, false);
+            const var_name = try self.allocator.alloc(u8, 1);
+            var_name[0] = fresh_var;
 
             std.debug.print("Fresh var: {c}\n", .{fresh_var});
-            const v = expE{ .UnboundVarE = slice };
+            const v = expE{ .UnboundVarE = var_name };
             const v_pointer = try self.allocator.create(expE);
             v_pointer.* = v;
 
@@ -1116,11 +1115,17 @@ pub const UnifyM = struct {
 
         var it = constraints.keyIterator();
         while (it.next()) |key| {
+            std.debug.print("Top of repeatedly_simplify while loop!\n", .{});
             var simplified = try self.simplify(key.*);
             defer simplified.deinit();
 
             var sub_it = simplified.keyIterator();
             while (sub_it.next()) |sub_key| {
+                std.debug.print("Finished simplifying. Returned constraint: left: ", .{});
+                try print_debruijn_exp(self.allocator, sub_key.left);
+                std.debug.print(" | right: ", .{});
+                try print_debruijn_exp(self.allocator, sub_key.right);
+                std.debug.print("\n\n", .{});
                 try result.put(sub_key.*, {});
             }
         }
@@ -1228,10 +1233,12 @@ pub const UnifyM = struct {
         var nargs: usize = 0;
         while (nargs <= context_len + 3) : (nargs += 1) {
             var subst = SubstMap.init(self.allocator);
-            const inner_mv = get_fresh_var(FRESH_INDEX);
+            const inner_mv = get_fresh_var(FRESH_INDEX, true);
             FRESH_INDEX += 1;
+            const metavar_name = try self.allocator.alloc(u8, 1);
+            metavar_name[0] = inner_mv;
             var inner_term = try self.allocator.create(expE);
-            inner_term.* = expE{ .MetavarE = inner_mv };
+            inner_term.* = expE{ .MetavarE = metavar_name };
             var arg_index: usize = 0;
             while (arg_index < nargs) : (arg_index += 1) {
                 const arg = try self.allocator.create(expE);
@@ -1324,6 +1331,11 @@ pub const UnifyM = struct {
 
         var it = cs_simplified.keyIterator();
         while (it.next()) |key| {
+            std.debug.print("After simplifying in unify method checking constraint: left: ", .{});
+            try print_debruijn_exp(self.allocator, key.left);
+            std.debug.print(" | right: ", .{});
+            try print_debruijn_exp(self.allocator, key.right);
+            std.debug.print("\n\n", .{});
             if (is_flex_flex(key.*)) {
                 try flex_flex.put(key.*, {});
             } else {
@@ -1337,6 +1349,7 @@ pub const UnifyM = struct {
             while (ff_it.next()) |key| {
                 try result_constraints.put(key.*, {});
             }
+            std.debug.print("Hitting here\n", .{});
             return .{ subst, result_constraints };
         }
 
@@ -1379,11 +1392,17 @@ pub const UnifyM = struct {
     }
 };
 
-fn get_fresh_var(fresh_id: usize) u8 {
+fn get_fresh_var(fresh_id: usize, metavar_flag: bool) u8 {
     std.debug.print("In get_fresh_var function\n", .{});
-    const ascii_char = @as(u8, @intCast((fresh_id % 26) + 'a'));
-    std.debug.print("ascii_char: {c}\n", .{ascii_char});
-    return ascii_char;
+    if (metavar_flag) {
+        const ascii_char = @as(u8, @intCast((fresh_id % 26) + 'A'));
+        std.debug.print("ascii_char: {c}\n", .{ascii_char});
+        return ascii_char;
+    } else {
+        const ascii_char = @as(u8, @intCast((fresh_id % 26) + 'a'));
+        std.debug.print("ascii_char: {c}\n", .{ascii_char});
+        return ascii_char;
+    }
 }
 
 pub fn generate_fresh_var(allocator: std.mem.Allocator, used_vars: *std.StringHashMap(void)) ![]const u8 {
