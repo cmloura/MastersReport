@@ -1021,6 +1021,30 @@ pub const UnifyM = struct {
                 return result;
             }
         }
+
+        if (t1.* == .ApplyE and t2.* == .ApplyE) {
+            if (is_stuck(t1) and !is_stuck(t2)) {
+                const t2func_copy = try copy_expr(self.allocator, t2.*.ApplyE.func);
+                const newleft = try self.allocator.create(expE);
+                newleft.* = expE{ .ApplyE = .{ .func = t2func_copy, .arg = t1.ApplyE.arg } };
+                return self.simplify(Constraint.init(newleft, t2));
+            } else if (!is_stuck(t1) and is_stuck(t2)) {
+                const t1func_copy = try copy_expr(self.allocator, t1.*.ApplyE.func);
+                const newright = try self.allocator.create(expE);
+                newright.* = expE{ .ApplyE = .{ .func = t1func_copy, .arg = t2.ApplyE.arg } };
+                return self.simplify(Constraint.init(t1, newright));
+            } else if (t1.*.ApplyE.arg.* == .MetavarE and t2.*.ApplyE.arg.* != .MetavarE) {
+                const t2arg_copy = try copy_expr(self.allocator, t2.ApplyE.arg);
+                const newleft = try self.allocator.create(expE);
+                newleft.* = expE{ .ApplyE = .{ .func = t1.ApplyE.func, .arg = t2arg_copy } };
+                return self.simplify(Constraint.init(newleft, t2));
+            } else if (t1.*.ApplyE.arg.* != .MetavarE and t2.*.ApplyE.arg.* == .MetavarE) {
+                const t1arg_copy = try copy_expr(self.allocator, t1.*.ApplyE.arg);
+                const newright = try self.allocator.create(expE);
+                newright.* = expE{ .ApplyE = .{ .func = t2.ApplyE.func, .arg = t1arg_copy } };
+                return self.simplify(Constraint.init(t1, newright));
+            }
+        }
         const reduced_t1 = try reduce(self.allocator, t1);
         std.debug.print("Reduced t1: ", .{});
         try print_debruijn_exp(self.allocator, reduced_t1);
