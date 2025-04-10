@@ -1213,6 +1213,14 @@ pub const UnifyM = struct {
         return is_stuck(constraint.left) and is_stuck(constraint.right);
     }
 
+    pub fn print_constraint(self: *UnifyM, constraint: Constraint) !void {
+        std.debug.print("Left: ", .{});
+        try print_debruijn_exp(self.allocator, constraint.left);
+        std.debug.print(" | Right: ", .{});
+        try print_debruijn_exp(self.allocator, constraint.right);
+        std.debug.print("\n\n", .{});
+    }
+
     pub fn try_flex_rigid(self: *UnifyM, constraint: Constraint) !std.ArrayList(SubstMap) {
         std.debug.print("In try_flex_rigid function\n", .{});
         var results = std.ArrayList(SubstMap).init(self.allocator);
@@ -1250,6 +1258,17 @@ pub const UnifyM = struct {
         }
 
         if (!is_flex_rigid) {
+            return results;
+        }
+
+        if (context_len == 0) {
+            var subst = SubstMap.init(self.allocator);
+            if (is_stuck(t1_scope.head)) {
+                try subst.put(new_id.?, t2_scope.head);
+            } else {
+                try subst.put(new_id.?, t1_scope.head);
+            }
+            try results.append(subst);
             return results;
         }
 
@@ -1403,6 +1422,10 @@ pub const UnifyM = struct {
         }
         return null;
     }
+
+    // pub fn simplify2(self: *UnifyM, constraint: Constraint) !void {
+
+    // }
 
     pub fn start_human_instrumentality(self: *UnifyM, constraint: Constraint) !?struct { SubstMap, ConstraintSet } {
         std.debug.print("Jarvis, start human instrumentality...\n", .{});
