@@ -8,3 +8,5 @@ The algorithm is based off of Daniel Gratzer's Haskell unification implementatio
 3. Once zig is properly downloaded, clone the repository
 4. Open a terminal at the repository location and run the following command: zig run test.zig
 5. Follow the instructions from the program prompts
+
+The ReadMe will be updated as time progresses with more information and additional fixes to the code
