@@ -50,9 +50,9 @@ pub fn main() !void {
     //const env = try Environment.init(allocator, null, null);
     //var state = State{ .code = converted_exp, .env = env, .stack = &stack };
 
-    //try stdout.print("\n\nCorrect Result for exp1: ", .{});
-    //const final_exp = try correct_beta_reduce(allocator, converted_exp);
-    //try print_debruijn_exp(allocator, final_exp);
+    try stdout.print("\n\nCorrect Result for exp1: ", .{});
+    const final_exp = try correct_beta_reduce(allocator, converted_exp);
+    try print_debruijn_exp(allocator, final_exp);
     //const final_exp2 = try correct_beta_reduce(allocator, second_converted_exp);
     //try stdout.print("\n\nCorrect Result for exp1: ", .{});
     //try print_debruijn_exp(allocator, final_exp2);
@@ -757,7 +757,7 @@ pub fn substitute_boundvar(allocator: std.mem.Allocator, new_term: *expE, i: usi
             result.* = expE{ .ApplyE = .{ .func = newleft, .arg = newright } };
         },
         .LambdaE => |lambder| {
-            const raised_exp = try raise_debruijn(allocator, new_term, 1, 0);
+            const raised_exp = try raise_debruijn(allocator, new_term, 1, 1);
             const newbod = try substitute_boundvar(allocator, raised_exp, i + 1, lambder.body);
             result.* = expE{ .LambdaE = .{ .arg = lambder.arg, .body = newbod } };
         },
@@ -793,7 +793,7 @@ pub fn substitute_metavar(allocator: std.mem.Allocator, new_term: *expE, id: []c
             result.* = expE{ .ApplyE = .{ .func = newleft, .arg = newright } };
         },
         .LambdaE => |lambder| {
-            const raised = try raise_debruijn(allocator, new_term, 1, 0);
+            const raised = try raise_debruijn(allocator, new_term, 1, 1);
             const newbod = try substitute_metavar(allocator, raised, id, lambder.body);
             result.* = expE{ .LambdaE = .{ .arg = lambder.arg, .body = newbod } };
         },
@@ -829,7 +829,7 @@ pub fn substitute_unboundvar(allocator: std.mem.Allocator, new_term: *expE, id: 
             result.* = expE{ .ApplyE = .{ .func = newleft, .arg = newright } };
         },
         .LambdaE => |lambder| {
-            const raised = try raise_debruijn(allocator, new_term, 1, 0);
+            const raised = try raise_debruijn(allocator, new_term, 1, 1);
             const newbod = try substitute_unboundvar(allocator, raised, id, lambder.body);
             result.* = expE{ .LambdaE = .{ .arg = lambder.arg, .body = newbod } };
         },
@@ -966,14 +966,14 @@ pub fn peepApTelescope(allocator: std.mem.Allocator, expr: *expE) !ApTelescope {
 
 pub fn applyApTelescope(allocator: std.mem.Allocator, head: *expE, args: []const *expE) !*expE {
     std.debug.print("In applyApTelescope function\n", .{});
-    var result = head.*;
+    const result = head;
     for (args) |arg| {
-        const left_pointer = try allocator.create(expE);
-        left_pointer.* = result;
+        var left_pointer = try allocator.create(expE);
+        left_pointer = result;
 
-        const right_pointer = try allocator.create(expE);
-        right_pointer.* = arg;
-        result = expE{ .ApplyE = .{ .func = left_pointer, .arg = right_pointer } };
+        var right_pointer = try allocator.create(expE);
+        right_pointer = arg;
+        result.* = expE{ .ApplyE = .{ .func = left_pointer, .arg = right_pointer } };
     }
     return result;
 }
@@ -1022,30 +1022,7 @@ pub const UnifyM = struct {
             }
         }
 
-        if (t1.* == .ApplyE and t2.* == .ApplyE) {
-            if (is_stuck(t1) and !is_stuck(t2)) {
-                const t2func_copy = try copy_expr(self.allocator, t2.*.ApplyE.func);
-                const newleft = try self.allocator.create(expE);
-                newleft.* = expE{ .ApplyE = .{ .func = t2func_copy, .arg = t1.ApplyE.arg } };
-                return self.simplify(Constraint.init(newleft, t2));
-            } else if (!is_stuck(t1) and is_stuck(t2)) {
-                const t1func_copy = try copy_expr(self.allocator, t1.*.ApplyE.func);
-                const newright = try self.allocator.create(expE);
-                newright.* = expE{ .ApplyE = .{ .func = t1func_copy, .arg = t2.ApplyE.arg } };
-                return self.simplify(Constraint.init(t1, newright));
-            } else if (t1.*.ApplyE.arg.* == .MetavarE and t2.*.ApplyE.arg.* != .MetavarE) {
-                const t2arg_copy = try copy_expr(self.allocator, t2.ApplyE.arg);
-                const newleft = try self.allocator.create(expE);
-                newleft.* = expE{ .ApplyE = .{ .func = t1.ApplyE.func, .arg = t2arg_copy } };
-                return self.simplify(Constraint.init(newleft, t2));
-            } else if (t1.*.ApplyE.arg.* != .MetavarE and t2.*.ApplyE.arg.* == .MetavarE) {
-                const t1arg_copy = try copy_expr(self.allocator, t1.*.ApplyE.arg);
-                const newright = try self.allocator.create(expE);
-                newright.* = expE{ .ApplyE = .{ .func = t2.ApplyE.func, .arg = t1arg_copy } };
-                return self.simplify(Constraint.init(t1, newright));
-            }
-        }
-        const reduced_t1 = try reduce(self.allocator, t1);
+        const reduced_t1 = try correct_beta_reduce(self.allocator, t1);
         std.debug.print("Reduced t1: ", .{});
         try print_debruijn_exp(self.allocator, reduced_t1);
         std.debug.print("\n", .{});
@@ -1054,7 +1031,7 @@ pub const UnifyM = struct {
             return self.simplify(Constraint.init(reduced_t1, t2));
         }
 
-        const reduced_t2 = try reduce(self.allocator, t2);
+        const reduced_t2 = try correct_beta_reduce(self.allocator, t2);
         std.debug.print("Reduced t2: ", .{});
         try print_debruijn_exp(self.allocator, reduced_t2);
         std.debug.print("\n", .{});
@@ -1231,104 +1208,210 @@ pub const UnifyM = struct {
         const t2_scope = try peepApTelescope(self.allocator, constraint.right);
         defer t2_scope.args.deinit();
 
-        var new_id: ?[]const u8 = null;
-        var context_len: usize = 0;
-        var stuck_term: *expE = undefined;
-        var is_flex_rigid = false;
-
-        if (t1_scope.head.* == .MetavarE) {
-            var metavar_set = try find_all_metavars(self.allocator, constraint.right);
-            defer metavar_set.deinit();
-
-            if (!metavar_set.contains(t1_scope.head.MetavarE)) {
-                new_id = t1_scope.head.*.MetavarE;
-                context_len = t1_scope.args.items.len;
-                stuck_term = t2_scope.head;
-                //stuck_term = constraint.right;?
-                is_flex_rigid = true;
-            }
-        }
-
-        if (!is_flex_rigid and t2_scope.head.* == .MetavarE) {
-            new_id = t2_scope.head.*.MetavarE;
-            context_len = t2_scope.args.items.len;
-            stuck_term = t1_scope.head;
-            //stuck_term = constraint.left;
-            is_flex_rigid = true;
-        }
-
-        if (!is_flex_rigid) {
-            return results;
-        }
-
-        if (context_len == 0) {
+        if (t1_scope.args.items.len == 0 and t2_scope.args.items.len == 0) {
             var subst = SubstMap.init(self.allocator);
             if (is_stuck(t1_scope.head)) {
-                try subst.put(new_id.?, t2_scope.head);
+                try subst.put(t1_scope.head.MetavarE, t2_scope.head);
             } else {
-                try subst.put(new_id.?, t1_scope.head);
+                try subst.put(t2_scope.head.MetavarE, t1_scope.head);
             }
             try results.append(subst);
             return results;
         }
 
-        const mv = new_id.?;
-        var nargs: usize = 0;
-        while (nargs <= context_len + 3) : (nargs += 1) {
-            var subst = SubstMap.init(self.allocator);
+        if (t1_scope.head.* == .MetavarE and is_stuck(t2_scope.head)) {
+            const mv_id = t1_scope.head.MetavarE;
+            const right_metavars = try find_all_metavars(self.allocator, constraint.right);
+            if (!right_metavars.contains(mv_id)) {
+                const bvars = t1_scope.args.items.len;
+
+                for (0..5) |nargs| {
+                    const substs = try self.generate_substitutions(bvars, mv_id, constraint.right, nargs);
+                    for (substs.items) |subst| {
+                        try results.append(subst);
+                    }
+                }
+            }
+        } else if (t2_scope.head.* == .MetavarE and is_stuck(t1_scope.head)) {
+            const mv_id = t2_scope.head.MetavarE;
+            const left_mv = try find_all_metavars(self.allocator, constraint.left);
+
+            if (!left_mv.contains(mv_id)) {
+                const bvars = t2_scope.args.items.len;
+
+                for (0..5) |nargs| {
+                    const substs = try self.generate_substitutions(bvars, mv_id, constraint.left, nargs);
+                    for (substs.items) |subst| {
+                        try results.append(subst);
+                    }
+                }
+            }
+        }
+        return results;
+
+        // var new_id: ?[]const u8 = null;
+        // var context_len: usize = 0;
+        // var stuck_term: *expE = undefined;
+        // var is_flex_rigid = false;
+
+        // if (t1_scope.head.* == .MetavarE) {
+        //     var metavar_set = try find_all_metavars(self.allocator, constraint.right);
+        //     defer metavar_set.deinit();
+
+        //     if (!metavar_set.contains(t1_scope.head.MetavarE)) {
+        //         new_id = t1_scope.head.*.MetavarE;
+        //         context_len = t1_scope.args.items.len;
+        //         stuck_term = t2_scope.head;
+        //         //stuck_term = constraint.right;?
+        //         is_flex_rigid = true;
+        //     }
+        // }
+
+        // if (!is_flex_rigid and t2_scope.head.* == .MetavarE) {
+        //     new_id = t2_scope.head.*.MetavarE;
+        //     context_len = t2_scope.args.items.len;
+        //     stuck_term = t1_scope.head;
+        //     //stuck_term = constraint.left;
+        //     is_flex_rigid = true;
+        // }
+
+        // if (!is_flex_rigid) {
+        //     return results;
+        // }
+
+        // if (context_len == 0) {
+        //     var subst = SubstMap.init(self.allocator);
+        //     if (is_stuck(t1_scope.head)) {
+        //         try subst.put(new_id.?, t2_scope.head);
+        //     } else {
+        //         try subst.put(new_id.?, t1_scope.head);
+        //     }
+        //     try results.append(subst);
+        //     return results;
+        // }
+
+        // const mv = new_id.?;
+        // var nargs: usize = 0;
+        // while (nargs <= context_len + 3) : (nargs += 1) {
+        //     var subst = SubstMap.init(self.allocator);
+        //     const inner_mv = get_fresh_var(FRESH_INDEX, true);
+        //     FRESH_INDEX += 1;
+        //     const metavar_name = try self.allocator.alloc(u8, 1);
+        //     metavar_name[0] = inner_mv;
+        //     var inner_term = try self.allocator.create(expE);
+        //     inner_term.* = expE{ .MetavarE = metavar_name };
+        //     var arg_index: usize = 0;
+        //     while (arg_index < nargs) : (arg_index += 1) {
+        //         const arg = try self.allocator.create(expE);
+        //         arg.* = expE{ .BoundVarE = arg_index };
+        //         const app = try self.allocator.create(expE);
+        //         app.* = expE{ .ApplyE = .{ .func = inner_term, .arg = arg } };
+        //         inner_term = app;
+        //     }
+        //     var i: usize = 0;
+        //     while (i < context_len) : (i += 1) {
+        //         const arg = try self.allocator.create(expE);
+        //         arg.* = expE{ .BoundVarE = i };
+        //         const app = try self.allocator.create(expE);
+        //         app.* = expE{ .ApplyE = .{ .func = inner_term, .arg = arg } };
+        //         inner_term = app;
+        //     }
+
+        //     var lambder_bod = inner_term;
+        //     var j: usize = 0;
+        //     while (j < nargs) : (j += 1) {
+        //         const temp = try self.allocator.create(expE);
+        //         temp.* = expE{ .LambdaE = .{ .arg = "", .body = lambder_bod } };
+        //         lambder_bod = temp;
+        //     }
+        //     try subst.put(mv, lambder_bod);
+        //     try results.append(subst);
+        // }
+
+        // if (is_closed(stuck_term)) {
+        //     var subst = SubstMap.init(self.allocator);
+
+        //     var term = stuck_term;
+        //     var j: usize = 0;
+        //     while (j < context_len) : (j += 1) {
+        //         const temp = try self.allocator.create(expE);
+        //         temp.* = expE{ .LambdaE = .{ .arg = "", .body = term } };
+        //         term = temp;
+        //     }
+        //     try subst.put(mv, term);
+        //     try results.append(subst);
+        // }
+        // return results;
+    }
+
+    pub fn generate_substitutions(self: *UnifyM, bvars: usize, mv: []const u8, stuck_term: *expE, nargs: usize) !std.ArrayList(SubstMap) {
+        var result = std.ArrayList(SubstMap).init(self.allocator);
+
+        var args = std.ArrayList(*expE).init(self.allocator);
+
+        for (0..nargs) |_| {
             const inner_mv = get_fresh_var(FRESH_INDEX, true);
             FRESH_INDEX += 1;
             const metavar_name = try self.allocator.alloc(u8, 1);
             metavar_name[0] = inner_mv;
-            var inner_term = try self.allocator.create(expE);
-            inner_term.* = expE{ .MetavarE = metavar_name };
-            var arg_index: usize = 0;
-            while (arg_index < nargs) : (arg_index += 1) {
-                const arg = try self.allocator.create(expE);
-                arg.* = expE{ .BoundVarE = arg_index };
+            const arg_mv = try self.allocator.create(expE);
+            arg_mv.* = expE{ .MetavarE = metavar_name };
+
+            var saturated_mv = arg_mv;
+            for (0..bvars) |i| {
+                const bvar = try self.allocator.create(expE);
+                bvar.* = expE{ .BoundVarE = i };
+                const bvar_clone = try copy_expr(self.allocator, bvar);
+
                 const app = try self.allocator.create(expE);
-                app.* = expE{ .ApplyE = .{ .func = inner_term, .arg = arg } };
-                inner_term = app;
+                app.* = expE{ .ApplyE = .{ .func = saturated_mv, .arg = bvar_clone } };
+                saturated_mv = app;
             }
-            var i: usize = 0;
-            while (i < context_len) : (i += 1) {
-                const arg = try self.allocator.create(expE);
-                arg.* = expE{ .BoundVarE = i };
-                const app = try self.allocator.create(expE);
-                app.* = expE{ .ApplyE = .{ .func = inner_term, .arg = arg } };
-                inner_term = app;
+            try args.append(saturated_mv);
+        }
+
+        for (0..bvars) |i| {
+            var subst = SubstMap.init(self.allocator);
+            var solution = try self.allocator.create(expE);
+            solution.* = expE{ .BoundVarE = i };
+
+            for (0..bvars) |_| {
+                const lambder = try self.allocator.create(expE);
+                lambder.* = expE{ .LambdaE = .{ .arg = "", .body = solution } };
+                solution = lambder;
             }
 
-            var lambder_bod = inner_term;
-            var j: usize = 0;
-            while (j < nargs) : (j += 1) {
-                const temp = try self.allocator.create(expE);
-                temp.* = expE{ .LambdaE = .{ .arg = "", .body = lambder_bod } };
-                lambder_bod = temp;
+            if (args.items.len > 0) {
+                solution = try applyApTelescope(self.allocator, solution, args.items);
             }
-            try subst.put(mv, lambder_bod);
-            try results.append(subst);
+
+            try subst.put(mv, solution);
+            try result.append(subst);
         }
 
         if (is_closed(stuck_term)) {
             var subst = SubstMap.init(self.allocator);
+            var solution = try copy_expr(self.allocator, stuck_term);
 
-            var term = stuck_term;
-            var j: usize = 0;
-            while (j < context_len) : (j += 1) {
-                const temp = try self.allocator.create(expE);
-                temp.* = expE{ .LambdaE = .{ .arg = "", .body = term } };
-                term = temp;
+            for (0..bvars) |_| {
+                const lambder = try self.allocator.create(expE);
+                lambder.* = expE{ .LambdaE = .{ .arg = "", .body = solution } };
+                solution = lambder;
             }
-            try subst.put(mv, term);
-            try results.append(subst);
+
+            if (args.items.len > 0) {
+                solution = try applyApTelescope(self.allocator, solution, args.items);
+            }
+
+            try subst.put(mv, solution);
+            try result.append(subst);
         }
-        return results;
+        return result;
     }
 
     // the <+> operator
     pub fn combine_substitution(self: *UnifyM, s1: SubstMap, s2: SubstMap) !SubstMap {
-        std.debug.print("In combine_substitution function\n", .{});
+        //std.debug.print("In combine_substitution function\n", .{});
         var result = SubstMap.init(self.allocator);
 
         var conflict_it = s1.iterator();
@@ -1359,12 +1442,21 @@ pub const UnifyM = struct {
     }
 
     pub fn unify(self: *UnifyM, subst: SubstMap, constraint: ConstraintSet) !?struct { SubstMap, ConstraintSet } {
-        std.debug.print("In unify function\n", .{});
+        //std.debug.print("In unify function\n", .{});
         var constraint_set = try self.apply_substitution_to_constraint(subst, constraint);
         defer constraint_set.deinit();
-
+        std.debug.print("Number of constraints in constraint_set: {d}\n", .{constraint_set.count()});
         var cs_simplified = try self.repeatedly_simplify(constraint_set);
         defer cs_simplified.deinit();
+        std.debug.print("Number of constraints in cs_simplified: {d}\n", .{cs_simplified.count()});
+        std.debug.print("Resulting constraints after repeatedly simplifying: [", .{});
+        var test_it = cs_simplified.keyIterator();
+        while (test_it.next()) |key| {
+            try print_debruijn_exp(self.allocator, key.left);
+            std.debug.print(", ", .{});
+            try print_debruijn_exp(self.allocator, key.right);
+            std.debug.print("]\n\n\n", .{});
+        }
 
         var flex_flex = ConstraintSet.init(self.allocator);
         defer flex_flex.deinit();
@@ -1422,10 +1514,6 @@ pub const UnifyM = struct {
         }
         return null;
     }
-
-    // pub fn simplify2(self: *UnifyM, constraint: Constraint) !void {
-
-    // }
 
     pub fn start_human_instrumentality(self: *UnifyM, constraint: Constraint) !?struct { SubstMap, ConstraintSet } {
         std.debug.print("Jarvis, start human instrumentality...\n", .{});
