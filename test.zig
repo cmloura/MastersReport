@@ -1219,7 +1219,7 @@ pub const UnifyM = struct {
             return results;
         }
 
-        if (t1_scope.head.* == .MetavarE and is_stuck(t2_scope.head)) {
+        if (t1_scope.head.* == .MetavarE and !is_stuck(t2_scope.head)) {
             const mv_id = t1_scope.head.MetavarE;
             const right_metavars = try find_all_metavars(self.allocator, constraint.right);
             if (!right_metavars.contains(mv_id)) {
@@ -1227,12 +1227,13 @@ pub const UnifyM = struct {
 
                 for (0..5) |nargs| {
                     const substs = try self.generate_substitutions(bvars, mv_id, constraint.right, nargs);
+
                     for (substs.items) |subst| {
                         try results.append(subst);
                     }
                 }
             }
-        } else if (t2_scope.head.* == .MetavarE and is_stuck(t1_scope.head)) {
+        } else if (t2_scope.head.* == .MetavarE and !is_stuck(t1_scope.head)) {
             const mv_id = t2_scope.head.MetavarE;
             const left_mv = try find_all_metavars(self.allocator, constraint.left);
 
@@ -1411,16 +1412,16 @@ pub const UnifyM = struct {
 
     // the <+> operator
     pub fn combine_substitution(self: *UnifyM, s1: SubstMap, s2: SubstMap) !SubstMap {
-        //std.debug.print("In combine_substitution function\n", .{});
+        std.debug.print("In combine_substitution function\n", .{});
         var result = SubstMap.init(self.allocator);
 
-        var conflict_it = s1.iterator();
-        while (conflict_it.next()) |entry| {
-            const id = entry.key_ptr.*;
-            if (s2.contains(id)) {
-                return error.SubstitutionConflict;
-            }
-        }
+        // var conflict_it = s1.iterator();
+        // while (conflict_it.next()) |entry| {
+        //     const id = entry.key_ptr.*;
+        //     if (s2.contains(id)) {
+        //         return error.SubstitutionConflict;
+        //     }
+        // }
 
         var it = s2.iterator();
         while (it.next()) |entry| {
@@ -1451,6 +1452,7 @@ pub const UnifyM = struct {
         std.debug.print("Number of constraints in cs_simplified: {d}\n", .{cs_simplified.count()});
         std.debug.print("Resulting constraints after repeatedly simplifying: [", .{});
         var test_it = cs_simplified.keyIterator();
+
         while (test_it.next()) |key| {
             try print_debruijn_exp(self.allocator, key.left);
             std.debug.print(", ", .{});
