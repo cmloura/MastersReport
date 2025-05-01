@@ -1,10 +1,12 @@
 const std = @import("std");
 var FRESH_INDEX: usize = 0;
 
+// Driver code
 pub fn main() !void {
     const stdin = std.io.getStdIn().reader();
     const stdout = std.io.getStdOut().writer();
     const allocator = std.heap.page_allocator;
+
     var freed_nodes = std.AutoHashMap(*expE, void).init(allocator);
     var used_vars = std.StringHashMap(void).init(allocator);
     defer used_vars.deinit();
@@ -114,10 +116,10 @@ pub fn main() !void {
 
     try free_exp(allocator, expstruct.resexp, &freed_nodes);
     try free_exp(allocator, converted_exp, &freed_nodes);
-    // try free_exp(allocator, final_exp, &freed_nodes);
     try free_exp(allocator, second_converted_exp, &freed_nodes);
 }
 
+// Frees memory allocated to expressions
 pub fn free_exp(allocator: std.mem.Allocator, expr: *expE, freed_nodes: *std.AutoHashMap(*expE, void)) !void {
     if (freed_nodes.contains(expr)) {
         return;
@@ -153,6 +155,7 @@ pub fn free_exp(allocator: std.mem.Allocator, expr: *expE, freed_nodes: *std.Aut
     }
 }
 
+// Helper function to print an expression
 pub fn print_exp(allocator: std.mem.Allocator, headexp: *expE) !void {
     const printer = std.io.getStdOut().writer();
     switch (headexp.*) {
@@ -180,6 +183,7 @@ pub fn print_exp(allocator: std.mem.Allocator, headexp: *expE) !void {
     }
 }
 
+// Helper function for printing De Bruijn Expressions
 pub fn print_debruijn_exp(allocator: std.mem.Allocator, headexp: *expE) !void {
     const printer = std.io.getStdOut().writer();
     switch (headexp.*) {
@@ -215,8 +219,10 @@ pub fn print_debruijn_exp(allocator: std.mem.Allocator, headexp: *expE) !void {
 // Token Scanner
 const Token = struct { kind: tokenT, value: []const u8 };
 
+// Definition of expression types
 const expE = union(enum) { VarE: []const u8, LambdaE: struct { arg: []const u8, body: *expE }, ApplyE: struct { func: *expE, arg: *expE }, UnboundVarE: []const u8, BoundVarE: usize, MetavarE: []const u8 };
 
+// Token Types
 const tokenT = enum { LamT, LParenT, RparenT, PeriodT, IdT, MetavariableT };
 
 const errors = error{ InputEndsButExpectedAnExpression, InputEndsButExpectedToken, TokenSeenButExpected, UnboundVariableSeen, InvalidFlexibleTerm, SubstitutionConflict };
@@ -229,6 +235,7 @@ pub fn is_uppercase_letter(c: u8) bool {
     return c >= 'A' and c <= 'Z';
 }
 
+// Any character or word that begins with a lowercase letter is returned
 pub fn scanName(str: []const u8) []const u8 {
     var i: usize = 0;
     while (i < str.len and is_lowercase_letter(str[i])) {
@@ -237,6 +244,7 @@ pub fn scanName(str: []const u8) []const u8 {
     return str[0..i];
 }
 
+// Any character or word that begins with an uppercase letter is returned
 pub fn scanMetavariable(str: []const u8) []const u8 {
     var i: usize = 0;
     while (i < str.len and is_uppercase_letter(str[i])) {
@@ -245,6 +253,7 @@ pub fn scanMetavariable(str: []const u8) []const u8 {
     return str[0..i];
 }
 
+//
 pub fn scan(str: []u8, allocator: std.mem.Allocator, used_vars: *std.StringHashMap(void)) ![]Token {
     var tokenList = std.ArrayList(Token).init(allocator);
     defer tokenList.deinit();
@@ -966,16 +975,25 @@ pub fn peepApTelescope(allocator: std.mem.Allocator, expr: *expE) !ApTelescope {
 
 pub fn applyApTelescope(allocator: std.mem.Allocator, head: *expE, args: []const *expE) !*expE {
     std.debug.print("In applyApTelescope function\n", .{});
-    const result = head;
-    for (args) |arg| {
-        var left_pointer = try allocator.create(expE);
-        left_pointer = result;
+    std.debug.print("Head: ", .{});
+    try print_debruijn_exp(allocator, head);
+    std.debug.print("\n", .{});
 
-        var right_pointer = try allocator.create(expE);
-        right_pointer = arg;
-        result.* = expE{ .ApplyE = .{ .func = left_pointer, .arg = right_pointer } };
+    var argscopy = args;
+    if (argscopy.len > 1) {
+        const exp1 = argscopy[0];
+        argscopy = argscopy[1..];
+        const rest = try applyApTelescope(allocator, exp1, argscopy);
+        const app = try allocator.create(expE);
+        app.* = expE{ .ApplyE = .{ .func = head, .arg = rest } };
+        return app;
+    } else if (argscopy.len == 1) {
+        const app = try allocator.create(expE);
+        app.* = expE{ .ApplyE = .{ .func = head, .arg = argscopy[0] } };
+        return app;
+    } else {
+        return head;
     }
-    return result;
 }
 
 pub const Constraint = struct {
@@ -1178,7 +1196,7 @@ pub const UnifyM = struct {
             try print_debruijn_exp(self.allocator, t1);
             std.debug.print("\n", .{});
             const t2 = try self.apply_substitution(subst, key.right);
-            std.debug.print("apply_subst_to_constraint t1: ", .{});
+            std.debug.print("apply_subst_to_constraint t2: ", .{});
             try print_debruijn_exp(self.allocator, t2);
             std.debug.print("\n", .{});
             try result.put(Constraint.init(t1, t2), {});
@@ -1226,7 +1244,7 @@ pub const UnifyM = struct {
                 const bvars = t1_scope.args.items.len;
 
                 for (0..5) |nargs| {
-                    const substs = try self.generate_substitutions(bvars, mv_id, constraint.right, nargs);
+                    const substs = try self.generate_substitutions(bvars, mv_id, nargs);
 
                     for (substs.items) |subst| {
                         try results.append(subst);
@@ -1241,7 +1259,7 @@ pub const UnifyM = struct {
                 const bvars = t2_scope.args.items.len;
 
                 for (0..5) |nargs| {
-                    const substs = try self.generate_substitutions(bvars, mv_id, constraint.left, nargs);
+                    const substs = try self.generate_substitutions(bvars, mv_id, nargs);
                     for (substs.items) |subst| {
                         try results.append(subst);
                     }
@@ -1345,72 +1363,71 @@ pub const UnifyM = struct {
         // return results;
     }
 
-    pub fn generate_substitutions(self: *UnifyM, bvars: usize, mv: []const u8, stuck_term: *expE, nargs: usize) !std.ArrayList(SubstMap) {
+    pub fn generate_substitutions(self: *UnifyM, bvars: usize, mv: []const u8, nargs: usize) !std.ArrayList(SubstMap) {
+        std.debug.print("In generate_substitutions function\n", .{});
         var result = std.ArrayList(SubstMap).init(self.allocator);
+        //var args = std.ArrayList(*expE).init(self.allocator);
 
-        var args = std.ArrayList(*expE).init(self.allocator);
-
-        for (0..nargs) |_| {
-            const inner_mv = get_fresh_var(FRESH_INDEX, true);
-            FRESH_INDEX += 1;
-            const metavar_name = try self.allocator.alloc(u8, 1);
-            metavar_name[0] = inner_mv;
-            const arg_mv = try self.allocator.create(expE);
-            arg_mv.* = expE{ .MetavarE = metavar_name };
-
-            var saturated_mv = arg_mv;
-            for (0..bvars) |i| {
-                const bvar = try self.allocator.create(expE);
-                bvar.* = expE{ .BoundVarE = i };
-                const bvar_clone = try copy_expr(self.allocator, bvar);
-
-                const app = try self.allocator.create(expE);
-                app.* = expE{ .ApplyE = .{ .func = saturated_mv, .arg = bvar_clone } };
-                saturated_mv = app;
-            }
-            try args.append(saturated_mv);
-        }
-
+        // Generates x_i (Metavar1 x_0 .. x_n) ... (Metavar_r x_0 .. x_n)
         for (0..bvars) |i| {
             var subst = SubstMap.init(self.allocator);
-            var solution = try self.allocator.create(expE);
-            solution.* = expE{ .BoundVarE = i };
+            const bvar = try self.allocator.create(expE);
+            bvar.* = expE{ .BoundVarE = i };
 
+            var sat_metavar_applications = std.ArrayList(*expE).init(self.allocator);
+
+            // Creating metavariables M
+            for (0..nargs) |_| {
+                const inner_mv = get_fresh_var(FRESH_INDEX, true);
+                FRESH_INDEX += 1;
+                const metavar_name = try self.allocator.alloc(u8, 1);
+                metavar_name[0] = inner_mv;
+                const arg_mv = try self.allocator.create(expE);
+                arg_mv.* = expE{ .MetavarE = metavar_name };
+
+                // Saturating Metavariables, creating form (M 0 1 ... n )
+                var bound_vars_to_saturate = std.ArrayList(*expE).init(self.allocator);
+                const head = try copy_expr(self.allocator, arg_mv);
+
+                // Generate a list of bound variables to apply to the metavariable
+                for (0..bvars) |j| {
+                    const bvar1 = try self.allocator.create(expE);
+                    bvar1.* = expE{ .BoundVarE = j };
+                    const bvar_clone = try copy_expr(self.allocator, bvar1);
+                    try bound_vars_to_saturate.append(bvar_clone);
+                }
+                //std.mem.reverse(*expE, bound_vars_to_saturate.items);
+
+                std.debug.print("List of expressions to be telescoped: ", .{});
+                for (bound_vars_to_saturate.items) |exp| {
+                    try print_debruijn_exp(self.allocator, exp);
+                    std.debug.print("\n", .{});
+                }
+                const saturated_metavar = try applyApTelescope(self.allocator, head, bound_vars_to_saturate.items);
+                std.debug.print("Saturated Metavar: ", .{});
+                try print_debruijn_exp(self.allocator, saturated_metavar);
+                std.debug.print("\n\n", .{});
+                try sat_metavar_applications.append(saturated_metavar);
+            }
+
+            const true_body = try applyApTelescope(self.allocator, bvar, sat_metavar_applications.items);
+            var temp_true_body = try copy_expr(self.allocator, true_body);
             for (0..bvars) |_| {
                 const lambder = try self.allocator.create(expE);
-                lambder.* = expE{ .LambdaE = .{ .arg = "", .body = solution } };
-                solution = lambder;
+                lambder.* = expE{ .LambdaE = .{ .arg = "", .body = temp_true_body } };
+                temp_true_body = lambder;
             }
 
-            if (args.items.len > 0) {
-                solution = try applyApTelescope(self.allocator, solution, args.items);
-            }
-
-            try subst.put(mv, solution);
-            try result.append(subst);
-        }
-
-        if (is_closed(stuck_term)) {
-            var subst = SubstMap.init(self.allocator);
-            var solution = try copy_expr(self.allocator, stuck_term);
-
-            for (0..bvars) |_| {
-                const lambder = try self.allocator.create(expE);
-                lambder.* = expE{ .LambdaE = .{ .arg = "", .body = solution } };
-                solution = lambder;
-            }
-
-            if (args.items.len > 0) {
-                solution = try applyApTelescope(self.allocator, solution, args.items);
-            }
-
-            try subst.put(mv, solution);
+            std.debug.print("Substitution Generated: \n {s} -->", .{mv});
+            try print_debruijn_exp(self.allocator, temp_true_body);
+            std.debug.print("\n\n", .{});
+            try subst.put(mv, temp_true_body);
             try result.append(subst);
         }
         return result;
     }
 
-    // the <+> operator
+    // the <+> operator. s2 is the old one, s1 is the new one.
     pub fn combine_substitution(self: *UnifyM, s1: SubstMap, s2: SubstMap) !SubstMap {
         std.debug.print("In combine_substitution function\n", .{});
         var result = SubstMap.init(self.allocator);
@@ -1427,7 +1444,9 @@ pub const UnifyM = struct {
         while (it.next()) |entry| {
             const id = entry.key_ptr.*;
             const expr = entry.value_ptr;
-
+            std.debug.print("Substituting: id: {s} to", .{id});
+            try print_debruijn_exp(self.allocator, expr.*);
+            std.debug.print("\n", .{});
             const updated_expr = try self.apply_substitution(s1, expr.*);
             try result.put(id, updated_expr);
         }
@@ -1486,7 +1505,7 @@ pub const UnifyM = struct {
             while (ff_it.next()) |key| {
                 try result_constraints.put(key.*, {});
             }
-            std.debug.print("Hitting here\n", .{});
+            std.debug.print("No Flex/Rigid terms encountered.\n", .{});
             return .{ subst, result_constraints };
         }
 
@@ -1494,6 +1513,8 @@ pub const UnifyM = struct {
         if (flex_rigid_it.next()) |key| {
             const possible_substs = try self.try_flex_rigid(key.*);
             defer possible_substs.deinit();
+            std.debug.print("Number of possible substitutions: {d}\n", .{possible_substs.items.len});
+            std.debug.print("Number of current substitutions: {d}\n", .{subst.count()});
 
             for (possible_substs.items) |new_subst| {
                 const combine_subst = try self.combine_substitution(new_subst, subst);
