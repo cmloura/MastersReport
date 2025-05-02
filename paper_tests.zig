@@ -2,6 +2,7 @@ const mainfile = @import("test.zig");
 const expect = std.testing.expect;
 const std = @import("std");
 const allocator = std.heap.page_allocator;
+const Timer = std.time.Timer;
 
 test "trivial_example" {
     var dept_dict1 = std.StringHashMap(usize).init(allocator);
@@ -23,7 +24,12 @@ test "trivial_example" {
 
     var unifier = mainfile.UnifyM.init(allocator, 0);
     const constraint = mainfile.Constraint.init(converted_exp, second_converted_exp);
+    var timer = try Timer.start();
     const unification_result = try unifier.start_human_instrumentality(constraint);
+    const elapsed_time = @as(f64, @floatFromInt(timer.read()));
+    std.debug.print("Time elapsed for unification is: {d:.3}ms\n", .{
+        elapsed_time / std.time.ns_per_ms,
+    });
 
     try expect(unification_result != null);
     if (unification_result) |result| {
@@ -59,7 +65,12 @@ test "lambda_removal_example" {
 
     var unifier = mainfile.UnifyM.init(allocator, 0);
     const constraint = mainfile.Constraint.init(converted_exp, second_converted_exp);
+    var timer = try Timer.start();
     const unification_result = try unifier.start_human_instrumentality(constraint);
+    const elapsed_time = @as(f64, @floatFromInt(timer.read()));
+    std.debug.print("Time elapsed for unification is: {d:.3}ms\n", .{
+        elapsed_time / std.time.ns_per_ms,
+    });
 
     try expect(unification_result != null);
     if (unification_result) |result| {
@@ -95,7 +106,12 @@ test "beta_reduction_example" {
 
     var unifier = mainfile.UnifyM.init(allocator, 0);
     const constraint = mainfile.Constraint.init(converted_exp, second_converted_exp);
+    var timer = try Timer.start();
     const unification_result = try unifier.start_human_instrumentality(constraint);
+    const elapsed_time = @as(f64, @floatFromInt(timer.read()));
+    std.debug.print("Time elapsed for unification is: {d:.3}ms\n", .{
+        elapsed_time / std.time.ns_per_ms,
+    });
 
     try expect(unification_result != null);
     if (unification_result) |result| {
@@ -132,7 +148,12 @@ test "involved_lambda_example" {
 
     var unifier = mainfile.UnifyM.init(allocator, 0);
     const constraint = mainfile.Constraint.init(converted_exp, second_converted_exp);
+    var timer = try Timer.start();
     const unification_result = try unifier.start_human_instrumentality(constraint);
+    const elapsed_time = @as(f64, @floatFromInt(timer.read()));
+    std.debug.print("Time elapsed for unification is: {d:.3}ms\n", .{
+        elapsed_time / std.time.ns_per_ms,
+    });
 
     try expect(unification_result != null);
     if (unification_result) |result| {
@@ -169,8 +190,12 @@ test "deeper_tree_example" {
 
     var unifier = mainfile.UnifyM.init(allocator, 0);
     const constraint = mainfile.Constraint.init(converted_exp, second_converted_exp);
+    var timer = try Timer.start();
     const unification_result = try unifier.start_human_instrumentality(constraint);
-
+    const elapsed_time = @as(f64, @floatFromInt(timer.read()));
+    std.debug.print("Time elapsed for unification is: {d:.3}ms\n", .{
+        elapsed_time / std.time.ns_per_ms,
+    });
     try expect(unification_result != null);
     if (unification_result) |result| {
         const substitution_map = result.@"0";
@@ -183,5 +208,38 @@ test "deeper_tree_example" {
             std.debug.print("Replacement: {s}\n", .{replacement_res});
             try expect(std.mem.eql(u8, replacement_res, "lam. lam. s"));
         }
+    }
+}
+
+test "no_unifier_example" {
+    var dept_dict1 = std.StringHashMap(usize).init(allocator);
+    defer dept_dict1.deinit();
+
+    var dept_dict2 = std.StringHashMap(usize).init(allocator);
+    defer dept_dict2.deinit();
+
+    const exp1: []const u8 = "(lam x. x) y M";
+    const exp2: []const u8 = "z k";
+
+    const tlist1 = try mainfile.scan(exp1, allocator);
+    const tlist2 = try mainfile.scan(exp2, allocator);
+
+    const expstruct = try mainfile.parse_exp(allocator, tlist1);
+    const secondexpstruct = try mainfile.parse_exp(allocator, tlist2);
+    const converted_exp = try mainfile.convert_debruijn(allocator, expstruct.resexp, &dept_dict1);
+    const second_converted_exp = try mainfile.convert_debruijn(allocator, secondexpstruct.resexp, &dept_dict2);
+
+    var unifier = mainfile.UnifyM.init(allocator, 0);
+    const constraint = mainfile.Constraint.init(converted_exp, second_converted_exp);
+    var timer = try Timer.start();
+    const unification_result = try unifier.start_human_instrumentality(constraint);
+    const elapsed_time = @as(f64, @floatFromInt(timer.read()));
+    std.debug.print("Time elapsed for unification is: {d:.3}ms\n", .{
+        elapsed_time / std.time.ns_per_ms,
+    });
+    try expect(unification_result != null);
+    if (unification_result) |result| {
+        const substitution_map = result.@"0";
+        try expect(substitution_map.count() == 0);
     }
 }

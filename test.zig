@@ -67,7 +67,7 @@ pub fn main() !void {
         try stdout.print("Substitutions:\n", .{});
 
         if (substitution_map.count() == 0) {
-            try stdout.print("  (No substitutions needed)\n", .{});
+            try stdout.print("  Unification Failed - No possible substitutions could be found\n", .{});
         } else {
             var subst_it = substitution_map.iterator();
             while (subst_it.next()) |entry| {
