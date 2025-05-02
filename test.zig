@@ -205,23 +205,23 @@ pub fn print_debruijn_exp(allocator: std.mem.Allocator, headexp: *expE) !void {
 }
 
 pub fn convert_debruijn_exp_to_str(allocator: std.mem.Allocator, headexp: *expE) ![]const u8 {
-    var curr_str: []const u8 = null;
+    var curr_str: []const u8 = "";
     switch (headexp.*) {
         .VarE => |vare| {
             return vare;
         },
         .LambdaE => |lambder| {
-            curr_str = try std.fmt.allocPrint(allocator, "{s} lam. ", .{curr_str});
+            curr_str = try std.fmt.allocPrint(allocator, "{s}lam. ", .{curr_str});
             const rest = try convert_debruijn_exp_to_str(allocator, lambder.body);
             return try std.fmt.allocPrint(allocator, "{s}{s}", .{ curr_str, rest });
         },
         .ApplyE => |funcapp| {
-            curr_str = try std.fmt.allocPrint("{s}(", .{curr_str});
-            const rest = try convert_debruijn_exp_to_str(allocator, funcapp.func);
-            curr_str = try std.fmt.allocPrint("{s}{s}", .{ curr_str, rest });
-            curr_str = try std.fmt.allocPrint(")(", .{});
+            curr_str = try std.fmt.allocPrint(allocator, "{s}(", .{curr_str});
+            var rest = try convert_debruijn_exp_to_str(allocator, funcapp.func);
+            curr_str = try std.fmt.allocPrint(allocator, "{s}{s}", .{ curr_str, rest });
+            curr_str = try std.fmt.allocPrint(allocator, ")(", .{});
             rest = try convert_debruijn_exp_to_str(allocator, funcapp.arg);
-            curr_str = convert_debruijn_exp_to_str(allocator, "{s}{s})", .{ curr_str, rest });
+            curr_str = try std.fmt.allocPrint(allocator, "{s}{s})", .{ curr_str, rest });
             return curr_str;
         },
         .BoundVarE => |bvare| {
@@ -276,7 +276,7 @@ pub fn scanMetavariable(str: []const u8) []const u8 {
 }
 
 //
-pub fn scan(str: []u8, allocator: std.mem.Allocator) ![]Token {
+pub fn scan(str: []const u8, allocator: std.mem.Allocator) ![]Token {
     var tokenList = std.ArrayList(Token).init(allocator);
     defer tokenList.deinit();
 
