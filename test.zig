@@ -1242,7 +1242,7 @@ pub const UnifyM = struct {
                 }
             }
             var subst = SubstMap.init(self.allocator);
-            try subst.put(mv_id, t1_scope.head);
+            try subst.put(mv_id, t2_scope.head);
             try results.append(subst);
         } else if (t2_scope.head.* == .MetavarE and !is_stuck(t1_scope.head)) {
             const mv_id = t2_scope.head.MetavarE;
@@ -1259,7 +1259,7 @@ pub const UnifyM = struct {
                 }
             }
             var subst = SubstMap.init(self.allocator);
-            try subst.put(mv_id, t2_scope.head);
+            try subst.put(mv_id, t1_scope.head);
             try results.append(subst);
         }
 
@@ -1305,7 +1305,7 @@ pub const UnifyM = struct {
                     std.debug.print("\n", .{});
                 }
                 const saturated_metavar = try applyApTelescope(self.allocator, head, bound_vars_to_saturate.items);
-                const saturated_stuckterm = try applyApTelescope(self.allocator, stuck_term, bound_vars_to_saturate.items);
+                const saturated_stuckterm = try applyApTelescope(self.allocator, head, bound_vars_to_saturate.items);
                 std.debug.print("Saturated Metavar: ", .{});
                 try print_debruijn_exp(self.allocator, saturated_metavar);
                 std.debug.print("\n\n", .{});
@@ -1317,7 +1317,7 @@ pub const UnifyM = struct {
             }
 
             const true_body = try applyApTelescope(self.allocator, bvar, sat_metavar_applications.items);
-            const true_body_stuck = try applyApTelescope(self.allocator, bvar, sat_stuckterm_applications.items);
+            const true_body_stuck = try applyApTelescope(self.allocator, stuck_term, sat_stuckterm_applications.items);
             var temp_true_body = try copy_expr(self.allocator, true_body);
             var temp_true_body_stuck = try copy_expr(self.allocator, true_body_stuck);
             for (0..bvars) |_| {
@@ -1333,7 +1333,7 @@ pub const UnifyM = struct {
             std.debug.print("Substitution Generated: \n {s} -->", .{mv});
             try print_debruijn_exp(self.allocator, temp_true_body);
             std.debug.print("\n\n", .{});
-            std.debug.print("Substitution Generated: \n {s} -->", .{mv});
+            std.debug.print("Stuck Substitution Generated: \n {s} -->", .{mv});
             try print_debruijn_exp(self.allocator, temp_true_body_stuck);
             std.debug.print("\n\n", .{});
             try subst.put(mv, temp_true_body);
@@ -1346,39 +1346,39 @@ pub const UnifyM = struct {
     }
 
     // the <+> operator. s2 is the old one, s1 is the new one.
-    pub fn combine_substitution(self: *UnifyM, s1: SubstMap, s2: SubstMap) !SubstMap {
-        std.debug.print("In combine_substitution function\n", .{});
-        var result = SubstMap.init(self.allocator);
+    // pub fn combine_substitution(self: *UnifyM, s1: SubstMap, s2: SubstMap) !SubstMap {
+    //     std.debug.print("In combine_substitution function\n", .{});
+    //     var result = SubstMap.init(self.allocator);
 
-        var conflict_it = s1.iterator();
-        while (conflict_it.next()) |entry| {
-            const id = entry.key_ptr.*;
-            if (s2.contains(id)) {
-                //return error.SubstitutionConflict;
-                continue;
-            }
-        }
+    //     var conflict_it = s1.iterator();
+    //     while (conflict_it.next()) |entry| {
+    //         const id = entry.key_ptr.*;
+    //         if (s2.contains(id)) {
+    //             //return error.SubstitutionConflict;
+    //             continue;
+    //         }
+    //     }
 
-        var it = s2.iterator();
-        while (it.next()) |entry| {
-            const id = entry.key_ptr.*;
-            const expr = entry.value_ptr;
-            std.debug.print("Substituting: id: {s} to", .{id});
-            try print_debruijn_exp(self.allocator, expr.*);
-            std.debug.print("\n", .{});
-            const updated_expr = try self.apply_substitution(s1, expr.*);
-            try result.put(id, updated_expr);
-        }
+    //     var it = s2.iterator();
+    //     while (it.next()) |entry| {
+    //         const id = entry.key_ptr.*;
+    //         const expr = entry.value_ptr;
+    //         std.debug.print("Substituting: id: {s} to", .{id});
+    //         try print_debruijn_exp(self.allocator, expr.*);
+    //         std.debug.print("\n", .{});
+    //         const updated_expr = try self.apply_substitution(s1, expr.*);
+    //         try result.put(id, updated_expr);
+    //     }
 
-        it = s1.iterator();
-        while (it.next()) |entry| {
-            const id = entry.key_ptr.*;
-            if (!result.contains(id)) {
-                try result.put(id, entry.value_ptr.*);
-            }
-        }
-        return result;
-    }
+    //     it = s1.iterator();
+    //     while (it.next()) |entry| {
+    //         const id = entry.key_ptr.*;
+    //         if (!result.contains(id)) {
+    //             try result.put(id, entry.value_ptr.*);
+    //         }
+    //     }
+    //     return result;
+    // }
 
     pub fn unify(self: *UnifyM, subst: SubstMap, constraint: ConstraintSet) !?struct { SubstMap, ConstraintSet } {
         //std.debug.print("In unify function\n", .{});
@@ -1436,24 +1436,41 @@ pub const UnifyM = struct {
             std.debug.print("Number of current substitutions: {d}\n", .{subst.count()});
 
             for (possible_substs.items) |new_subst| {
-                const combine_subst = try self.combine_substitution(new_subst, subst);
-                var all_constraints = ConstraintSet.init(self.allocator);
-                var c_it = flex_rigid.keyIterator();
-                while (c_it.next()) |c_key| {
-                    try all_constraints.put(c_key.*, {});
-                }
+                //const combine_subst = try self.combine_substitution(new_subst, subst);
+                const potential_answer = try self.apply_substitution_to_constraint(new_subst, cs_simplified);
 
-                c_it = flex_flex.keyIterator();
-                while (c_it.next()) |c_key| {
-                    try all_constraints.put(c_key.*, {});
-                }
-
-                const result = try self.unify(combine_subst, all_constraints);
-                if (result != null) {
-                    return result;
+                var potential_final_constraint = potential_answer.keyIterator();
+                while (potential_final_constraint.next()) |final_key| {
+                    if (exp_equal(final_key.left, final_key.right)) {
+                        std.debug.print("Found a solution!\n", .{});
+                        return .{ new_subst, ConstraintSet.init(self.allocator) };
+                    } else {
+                        const reduced_side1 = try correct_beta_reduce(self.allocator, final_key.left);
+                        const reduced_side2 = try correct_beta_reduce(self.allocator, final_key.right);
+                        if (exp_equal(reduced_side1, reduced_side2)) {
+                            std.debug.print("Found a solution!\n", .{});
+                            return .{ new_subst, ConstraintSet.init(self.allocator) };
+                        }
+                    }
                 }
             }
+            // var all_constraints = ConstraintSet.init(self.allocator);
+            // var c_it = flex_rigid.keyIterator();
+            // while (c_it.next()) |c_key| {
+            //     try all_constraints.put(c_key.*, {});
+            // }
+
+            // c_it = flex_flex.keyIterator();
+            // while (c_it.next()) |c_key| {
+            //     try all_constraints.put(c_key.*, {});
+            // }
+
+            // const result = try self.unify(combine_subst, all_constraints);
+            // if (result != null) {
+            //     return result;
+            // }
         }
+
         return null;
     }
 
