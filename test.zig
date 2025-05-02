@@ -1,5 +1,8 @@
 const std = @import("std");
 var FRESH_INDEX: usize = 0;
+const ALLOC = std.heap.page_allocator;
+var USED_METAVARIABLES = std.ArrayList([]const u8).init(ALLOC);
+var USED_UBVARS = std.ArrayList([]const u8).init(ALLOC);
 
 // Driver code
 pub fn main() !void {
@@ -22,10 +25,10 @@ pub fn main() !void {
 
     const lambdaexp2 = (try stdin.readUntilDelimiterOrEof(&buf2, '\n')).?;
 
-    const tlist1 = try scan(lambdaexp1, allocator, &used_vars);
+    const tlist1 = try scan(lambdaexp1, allocator);
     defer allocator.free(tlist1);
 
-    const tlist2 = try scan(lambdaexp2, allocator, &used_vars);
+    const tlist2 = try scan(lambdaexp2, allocator);
     defer allocator.free(tlist2);
 
     var dept_dict1 = std.StringHashMap(usize).init(allocator);
@@ -45,11 +48,6 @@ pub fn main() !void {
     try print_debruijn_exp(allocator, converted_exp);
     try stdout.print("\n\nSecond Converted Expression: ", .{});
     try print_debruijn_exp(allocator, second_converted_exp);
-
-    try stdout.print("\n\nCorrect Result for exp1: ", .{});
-    const final_exp = try correct_beta_reduce(allocator, converted_exp);
-    try print_debruijn_exp(allocator, final_exp);
-    try stdout.print("\n", .{});
 
     try stdout.print("\nUnification time\n", .{});
     const uni_expr = try copy_expr(allocator, converted_exp);
@@ -206,6 +204,40 @@ pub fn print_debruijn_exp(allocator: std.mem.Allocator, headexp: *expE) !void {
     }
 }
 
+pub fn convert_debruijn_exp_to_str(allocator: std.mem.Allocator, headexp: *expE) ![]const u8 {
+    var curr_str: []const u8 = null;
+    switch (headexp.*) {
+        .VarE => |vare| {
+            return vare;
+        },
+        .LambdaE => |lambder| {
+            curr_str = try std.fmt.allocPrint(allocator, "{s} lam. ", .{curr_str});
+            const rest = try convert_debruijn_exp_to_str(allocator, lambder.body);
+            return try std.fmt.allocPrint(allocator, "{s}{s}", .{ curr_str, rest });
+        },
+        .ApplyE => |funcapp| {
+            curr_str = try std.fmt.allocPrint("{s}(", .{curr_str});
+            const rest = try convert_debruijn_exp_to_str(allocator, funcapp.func);
+            curr_str = try std.fmt.allocPrint("{s}{s}", .{ curr_str, rest });
+            curr_str = try std.fmt.allocPrint(")(", .{});
+            rest = try convert_debruijn_exp_to_str(allocator, funcapp.arg);
+            curr_str = convert_debruijn_exp_to_str(allocator, "{s}{s})", .{ curr_str, rest });
+            return curr_str;
+        },
+        .BoundVarE => |bvare| {
+            //std.debug.print("Bound Variable: ", .{});
+            return try std.fmt.allocPrint(allocator, "{d}", .{bvare});
+        },
+        .UnboundVarE => |uvare| {
+            //std.debug.print("Unbound Variable: ", .{});
+            return uvare;
+        },
+        .MetavarE => |metavar| {
+            return metavar;
+        },
+    }
+}
+
 // Token Scanner
 const Token = struct { kind: tokenT, value: []const u8 };
 
@@ -244,7 +276,7 @@ pub fn scanMetavariable(str: []const u8) []const u8 {
 }
 
 //
-pub fn scan(str: []u8, allocator: std.mem.Allocator, used_vars: *std.StringHashMap(void)) ![]Token {
+pub fn scan(str: []u8, allocator: std.mem.Allocator) ![]Token {
     var tokenList = std.ArrayList(Token).init(allocator);
     defer tokenList.deinit();
 
@@ -254,6 +286,9 @@ pub fn scan(str: []u8, allocator: std.mem.Allocator, used_vars: *std.StringHashM
         const c = whilestr[0];
 
         if (is_lowercase_letter(c)) {
+            const var_name = [_]u8{c};
+            const key = var_name[0..1];
+            try USED_UBVARS.append(key);
             const scannedstr = scanName(whilestr);
             if (std.mem.eql(u8, scannedstr, "lam")) {
                 try tokenList.append(Token{ .kind = tokenT.LamT, .value = "lam" });
@@ -266,10 +301,11 @@ pub fn scan(str: []u8, allocator: std.mem.Allocator, used_vars: *std.StringHashM
                 whilestr = whilestr[1..];
             }
         } else if (is_uppercase_letter(c)) {
+            const var_name = [_]u8{c};
+            const key = var_name[0..1];
+            try USED_METAVARIABLES.append(key);
             const scannedMetavar = scanMetavariable(whilestr);
             try tokenList.append(Token{ .kind = tokenT.MetavariableT, .value = scannedMetavar });
-            try used_vars.put(scannedMetavar, {});
-
             whilestr = whilestr[scannedMetavar.len..];
         } else {
             switch (c) {
@@ -423,6 +459,14 @@ pub fn convert_debruijn(allocator: std.mem.Allocator, expr: *expE, dept_dict: *s
             return ParseError.UnboundVariableSeen; // Any other expression types are created during the De Bruijn Process
         },
     }
+}
+
+// from https://www.reddit.com/r/Zig/comments/18jxq11/checking_if_an_array_contains_a_value_stdlib/
+pub fn array_contains(comptime T: type, haystack: std.ArrayList(T), needle: T) bool {
+    for (haystack.items) |element|
+        if (std.mem.eql(u8, element, needle))
+            return true;
+    return false;
 }
 
 pub fn shift_indices(allocator: std.mem.Allocator, d: usize, expr: *expE, cutoff: usize) !*expE {
@@ -1083,13 +1127,10 @@ pub const UnifyM = struct {
             const body1 = t1.*.LambdaE.body;
             const body2 = t2.*.LambdaE.body;
 
-            const fresh_id = self.gen();
-            const fresh_var = get_fresh_var(fresh_id, false);
-            const var_name = try self.allocator.alloc(u8, 1);
-            var_name[0] = fresh_var;
+            const fresh_var = try generate_fresh_var(self.allocator, false);
 
             std.debug.print("Fresh var: {c}\n", .{fresh_var});
-            const v = expE{ .UnboundVarE = var_name };
+            const v = expE{ .UnboundVarE = fresh_var };
             const v_pointer = try self.allocator.create(expE);
             v_pointer.* = v;
 
@@ -1233,7 +1274,7 @@ pub const UnifyM = struct {
             if (!right_metavars.contains(mv_id)) {
                 const bvars = t1_scope.args.items.len;
 
-                for (0..5) |nargs| {
+                for (0..10) |nargs| {
                     const substs = try self.generate_substitutions(bvars, mv_id, nargs, t2_scope.head);
 
                     for (substs.items) |subst| {
@@ -1281,12 +1322,9 @@ pub const UnifyM = struct {
 
             // Creating metavariables M
             for (0..nargs) |_| {
-                const inner_mv = get_fresh_var(FRESH_INDEX, true);
-                FRESH_INDEX += 1;
-                const metavar_name = try self.allocator.alloc(u8, 1);
-                metavar_name[0] = inner_mv;
+                const inner_mv = try generate_fresh_var(self.allocator, true);
                 const arg_mv = try self.allocator.create(expE);
-                arg_mv.* = expE{ .MetavarE = metavar_name };
+                arg_mv.* = expE{ .MetavarE = inner_mv };
 
                 // Saturating Metavariables, creating form (M 0 1 ... n )
                 var bound_vars_to_saturate = std.ArrayList(*expE).init(self.allocator);
@@ -1486,42 +1524,55 @@ pub const UnifyM = struct {
     }
 };
 
-fn get_fresh_var(fresh_id: usize, metavar_flag: bool) u8 {
-    std.debug.print("In get_fresh_var function\n", .{});
+pub fn generate_fresh_var(allocator: std.mem.Allocator, metavar_flag: bool) ![]const u8 {
     if (metavar_flag) {
-        const ascii_char = @as(u8, @intCast((fresh_id % 26) + 'A'));
-        std.debug.print("ascii_char: {c}\n", .{ascii_char});
-        return ascii_char;
-    } else {
-        const ascii_char = @as(u8, @intCast((fresh_id % 26) + 'a'));
-        std.debug.print("ascii_char: {c}\n", .{ascii_char});
-        return ascii_char;
-    }
-}
-
-pub fn generate_fresh_var(allocator: std.mem.Allocator, used_vars: *std.StringHashMap(void)) ![]const u8 {
-    var start: u8 = 'A';
-    while (start <= 'Z') : (start += 1) {
-        const var_name = [_]u8{start};
-        const key = var_name[0..1];
-        if (!used_vars.contains(key)) {
-            const res = try allocator.dupe(u8, key);
-            try used_vars.put(res, {});
-            return res;
-        }
-    }
-
-    var i: usize = 1;
-    while (true) : (i += 1) {
-        var c: u8 = 'A';
-        while (c <= 'Z') : (c += 1) {
-            const var_name = try std.fmt.allocPrint(allocator, "{c}{d}", .{ c, i });
-
-            if (!used_vars.contains(var_name)) {
-                try used_vars.put(var_name, {});
-                return var_name;
+        var start: u8 = 'A';
+        while (start <= 'Z') : (start += 1) {
+            const var_name = [_]u8{start};
+            const key = var_name[0..1];
+            if (!array_contains([]const u8, USED_METAVARIABLES, key)) {
+                const res = try allocator.dupe(u8, key);
+                try USED_METAVARIABLES.append(res);
+                return res;
             }
-            allocator.free(var_name);
+        }
+
+        var i: usize = 1;
+        while (true) : (i += 1) {
+            var c: u8 = 'A';
+            while (c <= 'Z') : (c += 1) {
+                const var_name = try std.fmt.allocPrint(allocator, "{c}{d}", .{ c, i });
+                if (!array_contains([]const u8, USED_METAVARIABLES, var_name)) {
+                    try USED_METAVARIABLES.append(var_name);
+                    return var_name;
+                }
+                allocator.free(var_name);
+            }
+        }
+    } else {
+        var start: u8 = 'a';
+        while (start <= 'z') : (start += 1) {
+            const var_name = [_]u8{start};
+            const key = var_name[0..1];
+            if (!array_contains([]const u8, USED_UBVARS, key)) {
+                const res = try allocator.dupe(u8, key);
+                try USED_METAVARIABLES.append(res);
+                return res;
+            }
+        }
+
+        var i: usize = 1;
+        while (true) : (i += 1) {
+            var c: u8 = 'a';
+            while (c <= 'z') : (c += 1) {
+                const var_name = try std.fmt.allocPrint(allocator, "{c}{d}", .{ c, i });
+
+                if (!array_contains([]const u8, USED_UBVARS, var_name)) {
+                    try USED_METAVARIABLES.append(var_name);
+                    return var_name;
+                }
+                allocator.free(var_name);
+            }
         }
     }
 }
